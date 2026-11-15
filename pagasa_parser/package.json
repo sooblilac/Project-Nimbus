@@ -1,0 +1,9 @@
+{
+  "name": "pagasa-typhoon-fetcher",
+  "version": "2.0.0",
+  "description": "Downloads the latest PAGASA Tropical Cyclone Bulletin PDF and extracts the data to JSON",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "license": "MIT",
+  "dependencies": { "pdf-parse": "1.1.1" }
+}
