@@ -1,0 +1,227 @@
+[
+  {
+    "type": "Q",
+    "town": "0412",
+    "fields": [
+      "W2",
+      "R3",
+      "G75",
+      "E1O",
+      "C1"
+    ],
+    "time": "0800",
+    "notice": "",
+    "sms": "NB1 Q 0412 W2 R3 G75 E1O C1 T0800 KE285",
+    "decoded": {
+      "version": "NB1",
+      "type": "Q",
+      "townCode": "0412",
+      "time": "0800",
+      "notice": "",
+      "valid": true,
+      "storm": {
+        "warning": "2",
+        "rain": 3,
+        "gusts": 75,
+        "evacSite": 1,
+        "evacStatus": "O",
+        "classes": 1
+      },
+      "items": []
+    }
+  },
+  {
+    "type": "Q",
+    "town": "1374",
+    "fields": [
+      "WF",
+      "R3",
+      "G40",
+      "E1F",
+      "C1"
+    ],
+    "time": "0730",
+    "notice": "Bring IDs and water",
+    "sms": "NB1 Q 1374 WF R3 G40 E1F C1 T0730 /Bring IDs and water K6DA3",
+    "decoded": {
+      "version": "NB1",
+      "type": "Q",
+      "townCode": "1374",
+      "time": "0730",
+      "notice": "Bring IDs and water",
+      "valid": true,
+      "storm": {
+        "warning": "F",
+        "rain": 3,
+        "gusts": 40,
+        "evacSite": 1,
+        "evacStatus": "F",
+        "classes": 1
+      },
+      "items": []
+    }
+  },
+  {
+    "type": "F",
+    "town": "0517",
+    "fields": [
+      "A1HF",
+      "A2HF",
+      "A3MW",
+      "A4LC",
+      "A5HW:Purok_3_riverside"
+    ],
+    "time": "0745",
+    "notice": "",
+    "sms": "NB1 F 0517 A1HF A2HF A3MW A4LC A5HW:Purok_3_riverside T0745 K30AF",
+    "decoded": {
+      "version": "NB1",
+      "type": "F",
+      "townCode": "0517",
+      "time": "0745",
+      "notice": "",
+      "valid": true,
+      "storm": null,
+      "items": [
+        {
+          "index": 1,
+          "level": "H",
+          "now": "F",
+          "customName": null
+        },
+        {
+          "index": 2,
+          "level": "H",
+          "now": "F",
+          "customName": null
+        },
+        {
+          "index": 3,
+          "level": "M",
+          "now": "W",
+          "customName": null
+        },
+        {
+          "index": 4,
+          "level": "L",
+          "now": "C",
+          "customName": null
+        },
+        {
+          "index": 5,
+          "level": "H",
+          "now": "W",
+          "customName": "Purok 3 riverside"
+        }
+      ]
+    }
+  },
+  {
+    "type": "E",
+    "town": "0412",
+    "fields": [
+      "S1O72",
+      "S2O40",
+      "S3F100"
+    ],
+    "time": "0800",
+    "notice": "",
+    "sms": "NB1 E 0412 S1O72 S2O40 S3F100 T0800 K986C",
+    "decoded": {
+      "version": "NB1",
+      "type": "E",
+      "townCode": "0412",
+      "time": "0800",
+      "notice": "",
+      "valid": true,
+      "storm": null,
+      "items": [
+        {
+          "index": 1,
+          "status": "O",
+          "percentFull": 72
+        },
+        {
+          "index": 2,
+          "status": "O",
+          "percentFull": 40
+        },
+        {
+          "index": 3,
+          "status": "F",
+          "percentFull": 100
+        }
+      ]
+    }
+  },
+  {
+    "type": "R",
+    "town": "1374",
+    "fields": [
+      "R1X",
+      "R2X",
+      "R3L",
+      "R4O",
+      "R5X:Rizal_Street"
+    ],
+    "time": "0730",
+    "notice": "",
+    "sms": "NB1 R 1374 R1X R2X R3L R4O R5X:Rizal_Street T0730 KFE58",
+    "decoded": {
+      "version": "NB1",
+      "type": "R",
+      "townCode": "1374",
+      "time": "0730",
+      "notice": "",
+      "valid": true,
+      "storm": null,
+      "items": [
+        {
+          "index": 1,
+          "status": "X",
+          "customName": null
+        },
+        {
+          "index": 2,
+          "status": "X",
+          "customName": null
+        },
+        {
+          "index": 3,
+          "status": "L",
+          "customName": null
+        },
+        {
+          "index": 4,
+          "status": "O",
+          "customName": null
+        },
+        {
+          "index": 5,
+          "status": "X",
+          "customName": "Rizal Street"
+        }
+      ]
+    }
+  },
+  {
+    "tampered": "NB1 Q 1374 WF R3 G40 E1F C1 T0730 /Bring IDs and water K0000",
+    "decoded": {
+      "version": "NB1",
+      "type": "Q",
+      "townCode": "1374",
+      "time": "0730",
+      "notice": "Bring IDs and water",
+      "valid": false,
+      "storm": {
+        "warning": "F",
+        "rain": 3,
+        "gusts": 40,
+        "evacSite": 1,
+        "evacStatus": "F",
+        "classes": 1
+      },
+      "items": []
+    }
+  }
+]

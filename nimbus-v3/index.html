@@ -1,0 +1,1073 @@
+<title>Nimbus Demo v3</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  /* Layout: Nimbus app (map + bottom sheet) | SMS traffic and server | any-phone keyword SMS. LGU console on #lgu.
+     One white-and-blue theme on purpose. Every color is a token; design/tokens.json carries the same values for Flutter, Android and the Python console. */
+  :root {
+    --bg: #FFFFFF; --surface: #FFFFFF; --surface-2: #EEF4FD; --line: #D6E2F5;
+    --text: #0F2147; --muted: #566887; --primary: #2F6FE4; --primary-soft: #DCE8FD; --on-primary: #FFFFFF;
+    --danger: #D23F5E; --warning: #B7790A; --ok: #1C9467;
+    --map-ground: #F2F6FD; --map-top: #FFFFFF; --map-side: #C9DAF4; --map-side-2: #DDE8F8; --map-water: #B9D6FA; --map-road: #FFFFFF;
+    --sms-bg: #F5F8FE; --frame: #1E3A6E; color-scheme: light;
+    --font-display: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    --tap: 48px; --radius: 18px;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 16px; line-height: 1.5;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+  h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+  .wrap { max-width: 1320px; margin: 0 auto; }
+
+  .banner { margin: 12px auto 0; max-width: 1320px; display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: center; padding: 8px 14px; border-radius: 12px; background: var(--primary-soft); color: var(--text); font-size: 13px; font-weight: 600; }
+  header.top { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; justify-content: space-between; padding-block: 20px 8px; }
+  .brand { display: flex; gap: 14px; align-items: center; }
+  .brand svg { width: 56px; height: 56px; flex: none; }
+  .brand h1 { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+  .brand p { margin: 0; color: var(--muted); }
+  .head-right { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .views { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+  .views a { min-height: 44px; display: inline-flex; align-items: center; padding: 0 18px; border-radius: 999px; color: var(--muted); text-decoration: none; font-weight: 700; font-size: 15px; }
+  .views a[aria-current="page"] { background: var(--primary); color: var(--on-primary); }
+  .pill-btn { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); font-weight: 700; font-size: 15px; cursor: pointer; }
+  .pill-btn svg { width: 18px; height: 18px; }
+  .settings-wrap { position: relative; }
+  @media (max-width: 640px) { .settings { right: auto; left: 0; } }
+  .settings { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; width: min(320px, calc(100vw - 32px)); background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; display: grid; gap: 14px; box-shadow: 0 18px 40px rgba(15, 33, 71, 0.18); }
+  .set-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-weight: 600; font-size: 15px; }
+  .seg { display: inline-flex; padding: 4px; gap: 4px; border-radius: 999px; background: var(--surface-2); }
+  .seg button { min-height: 40px; border: 0; background: transparent; padding: 0 14px; border-radius: 999px; font-size: 14px; font-weight: 700; color: var(--muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+  .set-note { margin: 0; font-size: 13px; color: var(--muted); }
+
+  main.res { display: grid; grid-template-columns: 384px minmax(0, 1fr) 320px; gap: 24px; align-items: start; padding-block: 12px 32px; }
+  @media (max-width: 1160px) { main.res { grid-template-columns: 384px minmax(0, 1fr); } .basic-col { grid-column: 1 / -1; } }
+  @media (max-width: 780px) { main.res { grid-template-columns: minmax(0, 1fr); } }
+  .col-title { font-family: var(--font-display); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; font-weight: 800; }
+
+  /* ---- Phone app ---- */
+  .phone { background: var(--frame); border-radius: 48px; padding: 12px; max-width: 384px; margin: 0 auto; box-shadow: 0 30px 60px rgba(15, 33, 71, 0.25); }
+  .screen { position: relative; height: 800px; border-radius: 38px; overflow: hidden; background: var(--map-ground); isolation: isolate; }
+  .map { position: absolute; inset: 0; }
+  .map svg { width: 100%; height: 100%; display: block; }
+  .statusbar { position: absolute; top: 0; left: 0; right: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; padding: 14px 26px 0; font-size: 13px; font-weight: 700; }
+  .statusbar .right { display: flex; gap: 8px; align-items: center; }
+  .bars { display: inline-flex; gap: 2px; align-items: end; height: 12px; }
+  .bars i { width: 3px; background: var(--text); border-radius: 1px; }
+  .nodata { color: var(--danger); background: var(--surface); border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+  .top-pill { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); z-index: 5; width: 230px; background: var(--surface); border-radius: 16px; padding: 8px 12px 10px; text-align: center; box-shadow: 0 4px 14px rgba(47, 111, 228, 0.14); }
+  .top-pill b { display: block; font-family: var(--font-display); font-size: 16px; line-height: 1.25; }
+  .top-pill span { display: block; font-size: 12px; color: var(--muted); }
+  .fresh { height: 5px; border-radius: 999px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
+  .fresh i { display: block; height: 100%; background: var(--primary); border-radius: 999px; }
+  .rail { position: absolute; left: 12px; top: 112px; z-index: 5; display: grid; gap: 8px; background: var(--surface); padding: 6px; border-radius: 22px; box-shadow: 0 4px 14px rgba(47, 111, 228, 0.14); }
+  .tab { width: 58px; min-height: 52px; border: 0; border-radius: 16px; background: transparent; display: grid; justify-items: center; align-content: center; gap: 2px; font-size: 11px; font-weight: 700; color: var(--muted); cursor: pointer; padding: 6px 0; }
+  .tab svg { width: 22px; height: 22px; }
+  .tab[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+  .tools { position: absolute; right: 12px; top: 112px; z-index: 5; display: grid; gap: 10px; }
+  .round { width: var(--tap); height: var(--tap); border-radius: 50%; border: 0; background: var(--surface); display: grid; place-items: center; cursor: pointer; box-shadow: 0 4px 14px rgba(47, 111, 228, 0.14); font-weight: 800; font-size: 13px; }
+  .round svg { width: 22px; height: 22px; }
+  .round[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+  .map-key { position: absolute; left: 92px; right: 12px; bottom: calc(54% + 8px); z-index: 4; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--surface); padding: 6px 12px; border-radius: 12px; box-shadow: 0 4px 14px rgba(47, 111, 228, 0.1); }
+  .map-key span { display: inline-flex; align-items: center; gap: 5px; }
+  .map-key i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; height: 54%; background: var(--surface); border-radius: 28px 28px 0 0; box-shadow: 0 -10px 30px rgba(15, 33, 71, 0.16); display: flex; flex-direction: column; transition: height 0.3s ease; }
+  .sheet.expanded { height: 86%; }
+  .screen:has(.sheet.expanded) .map-key { display: none; }
+  .handle { flex: none; height: 30px; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
+  .handle i { width: 44px; height: 5px; border-radius: 999px; background: var(--line); }
+  .sheet-head { flex: none; padding: 0 18px; display: grid; gap: 10px; }
+  .sheet-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .sheet-title h2 { font-size: 22px; font-weight: 800; }
+  .town-select { min-height: var(--tap); width: 100%; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-2); padding: 0 14px; font-size: 16px; font-weight: 700; }
+  .seg.full { display: grid; grid-template-columns: 1fr 1fr; }
+  .sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 18px; display: grid; align-content: start; gap: 10px; }
+  .sheet-foot { flex: none; padding: 10px 18px 16px; border-top: 1px solid var(--surface-2); display: grid; gap: 6px; }
+  .primary { min-height: 56px; width: 100%; border: 0; border-radius: 16px; background: var(--primary); color: var(--on-primary); font-weight: 800; font-size: 17px; display: inline-flex; justify-content: center; align-items: center; gap: 10px; cursor: pointer; }
+  .primary svg { width: 22px; height: 22px; }
+  .primary:disabled { opacity: 0.65; cursor: progress; }
+  .hint { margin: 0; text-align: center; font-size: 13px; color: var(--muted); }
+  .status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 14px; font-weight: 600; color: var(--muted); }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--danger); }
+  .spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--primary); animation: spin 0.8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: center; padding: 12px; border-radius: 16px; background: var(--surface-2); }
+  .row .ic { width: 44px; height: 44px; border-radius: 14px; display: grid; place-items: center; background: var(--surface); color: var(--primary); font-weight: 800; font-size: 15px; }
+  .row .ic svg { width: 22px; height: 22px; }
+  .row .tag { display: block; font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .row .big { display: block; font-family: var(--font-display); font-size: 18px; font-weight: 800; line-height: 1.25; }
+  .row .sub { display: block; font-size: 13.5px; color: var(--muted); }
+  .row .bar { display: block; height: 6px; border-radius: 999px; background: var(--surface); margin-top: 6px; overflow: hidden; }
+  .row .bar i { display: block; height: 100%; border-radius: 999px; background: currentColor; }
+  .row.danger .ic { background: var(--danger); color: var(--on-primary); }
+  .row.warning .ic { background: var(--warning); color: var(--on-primary); }
+  .row.ok .ic { background: var(--ok); color: var(--on-primary); }
+  .row.primary-row .ic { background: var(--primary); color: var(--on-primary); }
+  .row.danger .bar { color: var(--danger); } .row.warning .bar { color: var(--warning); } .row.ok .bar { color: var(--ok); }
+  .meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .meta .ok { color: var(--ok); font-weight: 700; } .meta .bad { color: var(--danger); font-weight: 700; }
+  .raw { font-family: var(--font-mono); font-size: 12.5px; background: var(--sms-bg); border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; overflow-wrap: anywhere; color: var(--primary); }
+  .empty { border: 1.5px dashed var(--line); border-radius: 16px; padding: 22px 16px; color: var(--muted); font-size: 14px; text-align: center; display: grid; gap: 6px; }
+  .empty b { color: var(--text); font-family: var(--font-display); font-size: 18px; }
+  .saved-item { min-height: 64px; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: 16px; padding: 10px 14px; display: grid; gap: 2px; cursor: pointer; }
+  .saved-item b { font-size: 15px; } .saved-item span { font-size: 13px; color: var(--muted); }
+
+  /* ---- Panels ---- */
+  .panel { background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(47, 111, 228, 0.06); border-radius: 22px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+  .lane { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+  .node { font-size: 13px; font-weight: 700; color: var(--muted); padding: 8px 12px; border-radius: 12px; background: var(--surface-2); white-space: nowrap; }
+  .track { position: relative; height: 36px; background: linear-gradient(90deg, var(--line) 50%, transparent 0) center / 16px 2px repeat-x; }
+  .packet { position: absolute; top: 50%; left: 0; transform: translate(-50%, -50%); padding: 4px 12px; border-radius: 999px; font-family: var(--font-mono); font-size: 12px; font-weight: 600; white-space: nowrap; opacity: 0; transition: left 1.1s ease-in-out, opacity 0.2s; color: var(--on-primary); }
+  .packet.req { background: var(--primary); } .packet.rep { background: var(--ok); }
+  .sms-box { display: grid; gap: 6px; }
+  .sms-box .label { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 700; }
+  .sms { font-family: var(--font-mono); font-size: 14px; padding: 10px 12px; border-radius: 12px; background: var(--sms-bg); border: 1px solid var(--line); overflow-wrap: anywhere; min-height: 46px; }
+  .meter { height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--ok); width: 0; transition: width 0.6s; }
+  .log { font-family: var(--font-mono); font-size: 12.5px; background: var(--sms-bg); border-radius: 12px; border: 1px solid var(--line); padding: 10px 12px; min-height: 200px; max-height: 280px; overflow: auto; display: grid; align-content: start; gap: 3px; }
+  .log div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+  .log time { color: var(--muted); } .log .ok { color: var(--ok); } .log .info { color: var(--primary); } .log .warn { color: var(--warning); } .log .bad { color: var(--danger); }
+  .codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; font-size: 13px; color: var(--muted); }
+  .codes b { font-family: var(--font-mono); color: var(--text); margin-right: 6px; }
+
+  .basic { background: var(--frame); border-radius: 30px; padding: 12px; max-width: 320px; margin: 0 auto; }
+  .screen2 { background: #C9D6B0; color: #1B2410; border-radius: 12px; padding: 10px; min-height: 300px; max-height: 470px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono); font-size: 13px; }
+  .bubble { padding: 8px 10px; border-radius: 10px; max-width: 92%; overflow-wrap: anywhere; }
+  .bubble.out { align-self: flex-end; background: #1B2410; color: #C9D6B0; }
+  .bubble.in { align-self: flex-start; background: #E4EDCF; border: 1px solid #8FA06C; }
+  .bubble small { display: block; opacity: 0.7; font-size: 11px; margin-top: 4px; }
+  .compose { display: flex; gap: 8px; margin-top: 12px; }
+  .compose input { flex: 1; min-width: 0; min-height: var(--tap); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 0 12px; font-family: var(--font-mono); font-size: 14px; text-transform: uppercase; }
+  .compose button { min-height: var(--tap); background: var(--primary); color: var(--on-primary); border: 0; border-radius: 14px; padding: 0 18px; font-weight: 800; cursor: pointer; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .examples button { min-height: 40px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0 12px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); cursor: pointer; }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+
+  /* ---- LGU console ---- */
+  .console { display: grid; gap: 20px; padding-block: 12px 32px; }
+  .console-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 24px; }
+  .console-head h2 { font-size: 30px; font-weight: 800; }
+  .console-head p { margin: 0; color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 14px 18px; display: grid; }
+  .stat b { font-family: var(--font-display); font-size: 34px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 14px; }
+  .stat.good b { color: var(--ok); }
+  .console-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 20px; align-items: start; }
+  .console-col { display: grid; gap: 20px; min-width: 0; }
+  .panel h3 { font-size: 20px; font-weight: 800; }
+  .field { display: grid; gap: 6px; font-size: 14px; color: var(--muted); font-weight: 700; }
+  .field select, .field input, .text { min-height: var(--tap); background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; padding: 0 12px; font-size: 15px; font-weight: 600; color: var(--text); min-width: 0; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr); gap: 10px; }
+  .edit-list { display: grid; gap: 6px; }
+  .edit-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 44px; gap: 6px; align-items: center; padding: 6px 6px 6px 12px; border-radius: 14px; background: var(--surface-2); }
+  .edit-row.road { grid-template-columns: minmax(0, 1fr) auto 44px; }
+  .edit-row .name { font-size: 14px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+  .edit-row .new { font-size: 10px; font-weight: 800; color: var(--primary); margin-left: 6px; text-transform: uppercase; }
+  .edit-row select { min-height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); padding: 0 8px; font-size: 13px; font-weight: 600; }
+  .x { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); color: var(--danger); font-size: 20px; font-weight: 800; cursor: pointer; }
+  .add-row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; }
+  .add { border: 0; border-radius: 14px; background: var(--primary); color: var(--on-primary); font-size: 24px; font-weight: 800; cursor: pointer; }
+  @media (max-width: 460px) { .edit-row, .edit-row.road { grid-template-columns: minmax(0, 1fr) 44px; } .edit-row select { grid-column: 1; } }
+  .left { margin: -6px 0 0; text-align: right; font-size: 13px; color: var(--muted); }
+  .left.over, .fit.over { color: var(--danger); font-weight: 700; }
+  .fit { margin: 0; font-size: 14px; font-weight: 700; color: var(--ok); }
+  .fits { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+  .fits li { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+  .fits b { color: var(--ok); font-variant-numeric: tabular-nums; } .fits li.over b { color: var(--danger); }
+  .done { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 12px; border-radius: 14px; background: var(--surface-2); color: var(--ok); font-weight: 600; }
+  .linkish { min-height: 40px; background: none; border: 0; padding: 0; color: var(--primary); font-weight: 800; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .fine { margin: 0; text-align: center; font-size: 13px; color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-size: 12px; font-weight: 700; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px; border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
+  td.when { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.none { color: var(--muted); text-align: center; padding: 22px 10px; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; background: var(--primary-soft); color: var(--primary); }
+  .remove { min-height: 40px; background: none; border: 0; color: var(--danger); font-weight: 800; cursor: pointer; padding: 0 8px; }
+  @media (max-width: 980px) { .console-grid { grid-template-columns: minmax(0, 1fr); } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  footer { padding-block: 0 32px; color: var(--muted); font-size: 13px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .pulse { animation: pulse 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes pulse { 50% { transform: scale(1.12); opacity: 0.8; } }
+  .spin-slow { animation: spin 12s linear infinite; transform-origin: center; transform-box: fill-box; }
+  .zone-pulse { animation: zp 1.6s ease-in-out infinite; } @keyframes zp { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) { .packet, .meter i, .sheet { transition: none; } .spinner, .pulse, .spin-slow, .zone-pulse { animation: none; } }
+</style>
+
+<div class="banner" role="note"><span>Simulated demo</span><span>Sample storm, LGU and map data, not real PAGASA data</span><span>No SMS is actually sent</span></div>
+
+<div class="wrap">
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 1024 1024" aria-hidden="true">
+      <rect width="1024" height="1024" rx="230" fill="var(--primary)"/>
+      <g fill="none" stroke="var(--on-primary)" stroke-width="44" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M336,556 H692 A102,102 0 0 0 706,354 A162,162 0 0 0 398,318 A119,119 0 0 0 336,556 Z"/>
+        <path d="M371,630 V670 M465,630 V720 M559,630 V770 M653,630 V820"/>
+      </g>
+    </svg>
+    <div><h1>Nimbus</h1><p id="tagline">Storm updates by text. No mobile data needed.</p></div>
+  </div>
+  <div class="head-right">
+    <nav class="views" aria-label="Views">
+      <a href="#residents" id="tab-res">Residents</a>
+      <a href="#lgu" id="tab-lgu">LGU console</a>
+    </nav>
+    <div class="settings-wrap">
+      <button class="pill-btn" id="gear" type="button" aria-expanded="false" aria-controls="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+        Settings
+      </button>
+      <div class="settings" id="settings" hidden>
+        <div class="set-row"><span id="lang-label">App language</span>
+          <div class="seg" role="group" aria-labelledby="lang-label">
+            <button type="button" data-lang="en" aria-pressed="true">English</button>
+            <button type="button" data-lang="tl" aria-pressed="false">Tagalog</button>
+          </div>
+        </div>
+        <p class="set-note">Language changes the Nimbus app screens. Keyword SMS replies stay in English. The Tagalog wording hasn't been reviewed by a native speaker yet.</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="view-res">
+<main class="res">
+  <section aria-labelledby="app-title">
+    <p class="col-title" id="app-title">Nimbus app · Android</p>
+    <div class="phone">
+      <div class="screen">
+        <div class="map" id="map"></div>
+        <div class="statusbar">
+          <span id="clock">8:15</span>
+          <span class="right"><span class="nodata" id="nodata">No data</span>
+            <span class="bars" aria-label="Cell signal"><i style="height:4px"></i><i style="height:7px"></i><i style="height:10px"></i><i style="height:12px"></i></span></span>
+        </div>
+        <div class="top-pill" id="top-pill"><b id="pill-title"></b><span id="pill-sub"></span><div class="fresh" aria-hidden="true"><i id="pill-fresh"></i></div></div>
+        <div class="rail" role="group" aria-label="What to show" id="rail"></div>
+        <div class="tools">
+          <button class="round" id="t-raw" type="button" aria-pressed="false" aria-label="Show raw SMS">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>
+          </button>
+          <button class="round" id="t-lang" type="button" aria-label="Switch language to Tagalog">TL</button>
+        </div>
+        <div class="map-key" id="map-key" aria-hidden="true"></div>
+        <div class="sheet" id="sheet">
+          <button class="handle" id="handle" type="button" aria-label="Expand panel" aria-expanded="false"><i></i></button>
+          <div class="sheet-head">
+            <div class="sheet-title"><h2 id="sheet-h">Storm update</h2></div>
+            <label class="sr" for="town">Your town</label>
+            <select class="town-select" id="town"></select>
+            <div class="seg full" role="group" aria-label="Panel">
+              <button type="button" data-pane="latest" aria-pressed="true" id="pane-latest">Latest</button>
+              <button type="button" data-pane="saved" aria-pressed="false" id="pane-saved">Saved</button>
+            </div>
+          </div>
+          <div class="sheet-body" id="sheet-body" aria-live="polite" tabindex="0"></div>
+          <div class="sheet-foot">
+            <button class="primary" id="ask" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>
+              <span id="ask-label">Get storm update by SMS</span>
+            </button>
+            <p class="hint" id="hint">One tap sends one text. No mobile data used.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="net-title">
+    <p class="col-title" id="net-title">SMS traffic and Nimbus server</p>
+    <div class="panel">
+      <div class="lane" aria-hidden="true">
+        <span class="node">Phone</span>
+        <div class="track"><span class="packet req" id="pkt-req">request</span><span class="packet rep" id="pkt-rep">reply</span></div>
+        <span class="node">Nimbus server</span>
+      </div>
+      <div class="sms-box"><div class="label"><span>Request SMS</span><span id="req-count">0 / 160</span></div><div class="sms" id="req-sms"></div></div>
+      <div class="sms-box"><div class="label"><span>Packed reply SMS</span><span id="rep-count">0 / 160</span></div><div class="sms" id="rep-sms"></div><div class="meter" aria-hidden="true"><i id="rep-meter"></i></div></div>
+      <div><p class="col-title" style="margin-bottom:6px">Server log</p><div class="log" id="log" aria-live="polite"></div></div>
+      <div class="codes" id="codes" aria-label="Reply code key"></div>
+    </div>
+  </section>
+
+  <section class="basic-col" aria-labelledby="basic-title">
+    <p class="col-title" id="basic-title">Any phone · keyword SMS</p>
+    <div class="basic"><div class="screen2" id="thread" aria-live="polite"></div></div>
+    <form class="compose" id="compose">
+      <label for="kw" class="sr">Text message</label>
+      <input id="kw" autocomplete="off" value="NIMBUS NAGA CITY">
+      <button type="submit">Send</button>
+    </form>
+    <div class="examples" aria-label="Example texts">
+      <button type="button" data-kw="NIMBUS NAGA CITY">NIMBUS NAGA CITY</button>
+      <button type="button" data-kw="NIMBUS FLOOD MARIKINA">NIMBUS FLOOD MARIKINA</button>
+      <button type="button" data-kw="NIMBUS EVAC BATANGAS">NIMBUS EVAC BATANGAS</button>
+      <button type="button" data-kw="NIMBUS ROAD NAGA">NIMBUS ROAD NAGA</button>
+      <button type="button" data-kw="NIMBUS HELP">NIMBUS HELP</button>
+    </div>
+    <p class="note">For iPhones and basic phones: a plain text in, a readable text back. Put FLOOD, EVAC or ROAD before the town to ask about something else.</p>
+  </section>
+</main>
+</div>
+
+<section class="console" id="view-lgu" hidden aria-labelledby="lgu-title">
+  <div class="console-head">
+    <h2 id="lgu-title">LGU update console</h2>
+    <p>For authorized LGU staff. Anything published here is added to the next Nimbus reply for that town.</p>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="s-req">214</b><span>Requests today</span></div>
+    <div class="stat good"><b id="s-sent">214</b><span>Replies sent</span></div>
+    <div class="stat"><b id="s-queue">0</b><span>Replies waiting in queue</span></div>
+    <div class="stat"><b id="s-active">0</b><span>Active LGU announcements</span></div>
+  </div>
+  <div class="console-grid">
+    <form class="panel" id="lgu-form" aria-labelledby="post-title" novalidate>
+      <h3 id="post-title">Post an update</h3>
+      <label class="field" for="f-town">Town<select id="f-town"></select></label>
+      <div class="field"><span id="f-site-label">Evacuation site</span>
+        <div class="pair">
+          <select id="f-site" aria-labelledby="f-site-label"></select>
+          <select id="f-sitest" aria-label="Evacuation site status"><option value="O">Open</option><option value="F">Full</option><option value="X">Closed</option></select>
+        </div>
+      </div>
+      <label class="field" for="f-cls">Class suspension<select id="f-cls"></select></label>
+      <div class="field"><span id="f-flood-label">Flood-prone areas</span>
+        <div class="edit-list" id="f-flood" role="group" aria-labelledby="f-flood-label"></div>
+        <div class="add-row"><input class="text" id="f-flood-new" maxlength="30" autocomplete="off" placeholder="Add an area, e.g. Purok 3 riverside" aria-label="New flood-prone area"><button type="button" class="add" id="f-flood-add" aria-label="Add flood-prone area">+</button></div>
+      </div>
+      <div class="field"><span id="f-road-label">Road status</span>
+        <div class="edit-list" id="f-road" role="group" aria-labelledby="f-road-label"></div>
+        <div class="add-row"><input class="text" id="f-road-new" maxlength="30" autocomplete="off" placeholder="Add a road, e.g. Rizal Street" aria-label="New road"><button type="button" class="add" id="f-road-add" aria-label="Add road">+</button></div>
+      </div>
+      <label class="field" for="f-notice">Short notice (optional)<input id="f-notice" maxlength="80" autocomplete="off" placeholder="e.g. Bring IDs and water"></label>
+      <p class="left" id="f-left" aria-live="polite"></p>
+      <label class="field" for="f-stop">Stop sending after<select id="f-stop"></select></label>
+      <button class="primary" id="publish" type="submit">Publish to Nimbus</button>
+      <div class="done" id="f-done" role="status" hidden><span id="f-done-text"></span><button type="button" class="linkish" id="f-test">Test it on a resident’s phone</button></div>
+      <p class="fine">A real console would require staff sign-in and a second approval.</p>
+    </form>
+    <div class="console-col">
+      <section class="panel" aria-labelledby="recv-title">
+        <h3 id="recv-title">What residents will receive</h3>
+        <div class="sms-box"><div class="label"><span>Keyword SMS reply (any phone)</span><span id="p-kw-count"></span></div><div class="sms" id="p-kw"></div></div>
+        <div class="sms-box"><div class="label"><span>Packed reply (Nimbus app)</span><span id="p-pk-count"></span></div><div class="sms" id="p-pk"></div></div>
+        <p class="fit" id="p-fit"></p>
+        <ul class="fits" id="p-types" aria-label="Reply length for each request type"></ul>
+      </section>
+      <section class="panel" aria-labelledby="active-title">
+        <h3 id="active-title" tabindex="-1">Active announcements</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Town</th><th scope="col">Type</th><th scope="col">Details</th><th scope="col">Posted</th><th scope="col">Stops</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+          <tbody id="ann-body"></tbody>
+        </table></div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<footer>Demo of the Nimbus request-and-reply flow. The storm, its track, warnings, evacuation sites, class suspensions, flood-prone areas and road reports are made-up examples, and the maps are schematic sketches, not real hazard maps. The LGU console is a mock: nothing is sent and no sign-in is checked. A real reply depends on cell signal, SMS load and gateway speed. The packed format is shared with codec/ for Dart, Kotlin and Python.</footer>
+</div>
+
+<script src="nimbus-codec.js"></script>
+<script>
+(function () {
+  "use strict";
+  const Codec = window.NimbusCodec;
+  const $ = (id) => document.getElementById(id);
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const wait = (ms) => new Promise((r) => setTimeout(r, reduced ? 0 : ms));
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  const SV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+  const ICON = {
+    Q: SV + '<path d="M7 15h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.2 9.1 3 3 0 0 0 7 15z"/><path d="M9 18v2M13 18v3M17 18v2"/></svg>',
+    F: SV + '<path d="M3 9c2 0 2-2 4.5-2S10 9 12 9s2-2 4.5-2S19 9 21 9M3 14c2 0 2-2 4.5-2s2.5 2 4.5 2 2-2 4.5-2 2.5 2 4.5 2M3 19c2 0 2-2 4.5-2s2.5 2 4.5 2 2-2 4.5-2 2.5 2 4.5 2"/></svg>',
+    E: SV + '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></svg>',
+    R: SV + '<path d="M8 3L4 21M16 3l4 18"/><path d="M12 4v3M12 11v3M12 18v2"/></svg>',
+    wind: SV + '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/></svg>',
+    alert: SV + '<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/></svg>',
+    school: SV + '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2 9 2 12 0v-5"/></svg>',
+    note: SV + '<path d="M5 4h14v12H9l-4 4z"/></svg>'
+  };
+  const ORDER = ["Q", "F", "E", "R"];
+
+  // ---- Text for the app. Replies arrive as codes, so the app can show them in either language.
+  const I18N = {
+    en: {
+      tabs: { Q: "Storm", F: "Flood", E: "Evac", R: "Roads" },
+      titles: { Q: "Storm update", F: "Flood-prone areas", E: "Evacuation centers", R: "Road status" },
+      cta: { Q: "Get storm update by SMS", F: "Get flood areas by SMS", E: "Get evacuation centers by SMS", R: "Get road status by SMS" },
+      latest: "Latest", saved: (n) => "Saved" + (n ? " (" + n + ")" : ""), hint: "One tap sends one text. No mobile data used.",
+      tagline: "Storm updates by text. No mobile data needed.",
+      sending: "Sending request by SMS…", waiting: "Waiting for reply…", received: "Received by SMS · saved for offline use",
+      openedSaved: "Saved update, no signal needed", sigOk: "Signature checked", sigBad: "Signature failed, don’t trust this reply",
+      receivedAt: "Received", issued: "Issued",
+      emptyTitle: "Not requested yet", emptyBody: (cta) => "Tap “" + cta + "”. The reply is saved here so you can open it again offline.",
+      savedEmpty: "No saved updates yet. Every reply you get is saved here automatically.",
+      officialWarning: "Official warning (sample)", forecast: "Forecast", gusts: "gusts", generalFor: "General forecast for ",
+      stormMove: "Storm movement (sample)", moving: "Moving west-northwest, about 20 km/h", trackNote: "Dots show where the storm has been",
+      lguAnn: "LGU announcement", isFull: " is full", isClosed: " is closed", findRoom: "Open Evac to find a site with room",
+      evacTo: "Evacuate to ", siteOpen: "Site open", classesSusp: "Classes suspended", lguNotice: "LGU notice", fromLgu: (n) => "From " + n + " LGU",
+      noAnn: "No active LGU announcements",
+      rain: ["No rain", "Light rain", "Moderate rain", "Heavy rain", "Intense rain"],
+      level: { H: "High flood risk", M: "Medium flood risk", L: "Low flood risk" },
+      now: { F: "Flooding reported now", W: "On watch, water rising nearby", C: "No flooding now" },
+      newArea: "New area, not on the map yet", floodHead: (f, w) => (f ? plural(f, "area", "areas") + " flooding now" : "No flooding reported") + (w ? ", " + w + " on watch" : ""),
+      evacHead: (r, n) => r + " of " + n + " sites have room", open: "Open", full: "Full", closed: "Closed", almostFull: "Almost full", pctFull: (p) => p + "% full",
+      noRoom: "No room left, go to another site", notTaking: "Not taking evacuees",
+      roadHead: (x, l) => x || l ? [x ? plural(x, "road", "roads") + " closed" : "", l ? plural(l, "road", "roads") + " light vehicles only" : ""].filter(Boolean).join(", ") : "All tracked roads open",
+      rs: { O: ["Open", "Open to all vehicles"], L: ["Light vehicles only", "Trucks and buses turned back"], X: ["Closed", "Not passable, use another route"] },
+      newRoad: "New report, not on the map yet",
+      cls: ["No suspension", "All levels", "Preschool to SHS", "Preschool to grade 10", "Preschool to grade 6", "Preschool only"],
+      key: { Q: [["var(--primary)", "Storm center"], ["var(--muted)", "Past track"], ["#5AA9F5", "Wind direction"]],
+             F: [["var(--danger)", "High"], ["var(--warning)", "Medium"], ["var(--ok)", "Low"]],
+             E: [["var(--ok)", "Has room"], ["var(--warning)", "Almost full"], ["var(--danger)", "Full or closed"]],
+             R: [["var(--ok)", "Open"], ["var(--warning)", "Light vehicles"], ["var(--danger)", "Closed"]] },
+      expand: "Expand panel", collapse: "Collapse panel", rawOn: "Show raw SMS", toLang: "Switch language to Tagalog", langBtn: "TL"
+    },
+    tl: {
+      tabs: { Q: "Bagyo", F: "Baha", E: "Evac", R: "Daan" },
+      titles: { Q: "Update sa bagyo", F: "Mga lugar na binabaha", E: "Mga evacuation center", R: "Kalagayan ng kalsada" },
+      cta: { Q: "Kunin ang update sa bagyo sa SMS", F: "Kunin ang lugar na binabaha sa SMS", E: "Kunin ang evacuation center sa SMS", R: "Kunin ang kalagayan ng daan sa SMS" },
+      latest: "Pinakabago", saved: (n) => "Naka-save" + (n ? " (" + n + ")" : ""), hint: "Isang pindot, isang text. Walang mobile data na gagamitin.",
+      tagline: "Update sa bagyo sa text. Hindi kailangan ng mobile data.",
+      sending: "Ipinapadala ang tanong sa SMS…", waiting: "Hinihintay ang sagot…", received: "Natanggap sa SMS · naka-save para offline",
+      openedSaved: "Naka-save na update, hindi kailangan ng signal", sigOk: "Napatunayan ang lagda", sigBad: "Hindi tugma ang lagda, huwag pagkatiwalaan",
+      receivedAt: "Natanggap", issued: "Inilabas",
+      emptyTitle: "Hindi pa naitatanong", emptyBody: (cta) => "Pindutin ang “" + cta + "”. Ise-save dito ang sagot para mabuksan ulit kahit offline.",
+      savedEmpty: "Wala pang naka-save. Awtomatikong nase-save dito ang bawat sagot.",
+      officialWarning: "Opisyal na babala (sample)", forecast: "Taya ng panahon", gusts: "bugso", generalFor: "Pangkalahatang taya para sa ",
+      stormMove: "Galaw ng bagyo (sample)", moving: "Patungong kanluran-hilagang-kanluran, mga 20 km/h", trackNote: "Ipinapakita ng mga tuldok ang dinaanan ng bagyo",
+      lguAnn: "Anunsyo ng LGU", isFull: " ay puno na", isClosed: " ay sarado", findRoom: "Buksan ang Evac para makahanap ng may espasyo",
+      evacTo: "Lumikas sa ", siteOpen: "Bukas ang lugar", classesSusp: "Walang pasok", lguNotice: "Paalala ng LGU", fromLgu: (n) => "Mula sa LGU ng " + n,
+      noAnn: "Walang aktibong anunsyo ng LGU",
+      rain: ["Walang ulan", "Mahinang ulan", "Katamtamang ulan", "Malakas na ulan", "Napakalakas na ulan"],
+      level: { H: "Mataas ang panganib ng baha", M: "Katamtaman ang panganib", L: "Mababa ang panganib" },
+      now: { F: "May baha ngayon", W: "Binabantayan, tumataas ang tubig", C: "Walang baha ngayon" },
+      newArea: "Bagong lugar, wala pa sa mapa", floodHead: (f, w) => (f ? f + " lugar ang may baha ngayon" : "Walang naiulat na baha") + (w ? ", " + w + " ang binabantayan" : ""),
+      evacHead: (r, n) => r + " sa " + n + " lugar ang may espasyo", open: "Bukas", full: "Puno", closed: "Sarado", almostFull: "Halos puno", pctFull: (p) => p + "% puno",
+      noRoom: "Puno na, pumunta sa ibang lugar", notTaking: "Hindi tumatanggap ng lumilikas",
+      roadHead: (x, l) => x || l ? [x ? x + " daan ang sarado" : "", l ? l + " daan para sa magagaan na sasakyan" : ""].filter(Boolean).join(", ") : "Bukas ang lahat ng binabantayang daan",
+      rs: { O: ["Bukas", "Bukas sa lahat ng sasakyan"], L: ["Magagaan na sasakyan lang", "Pinababalik ang trak at bus"], X: ["Sarado", "Hindi madaanan, gumamit ng ibang ruta"] },
+      newRoad: "Bagong ulat, wala pa sa mapa",
+      cls: ["Walang suspensyon", "Lahat ng antas", "Preschool hanggang SHS", "Preschool hanggang grade 10", "Preschool hanggang grade 6", "Preschool lang"],
+      key: { Q: [["var(--primary)", "Gitna ng bagyo"], ["var(--muted)", "Dinaanan"], ["#5AA9F5", "Direksyon ng hangin"]],
+             F: [["var(--danger)", "Mataas"], ["var(--warning)", "Katamtaman"], ["var(--ok)", "Mababa"]],
+             E: [["var(--ok)", "May espasyo"], ["var(--warning)", "Halos puno"], ["var(--danger)", "Puno o sarado"]],
+             R: [["var(--ok)", "Bukas"], ["var(--warning)", "Magaang sasakyan"], ["var(--danger)", "Sarado"]] },
+      expand: "Palakihin ang panel", collapse: "Paliitin ang panel", rawOn: "Ipakita ang raw SMS", toLang: "Palitan ang wika sa English", langBtn: "EN"
+    }
+  };
+  const TL_WARN = { "0412": ["Signal No. 2", "Malakas na hangin sa loob ng 24 na oras"], "0517": ["Abiso sa baha", "Maaaring umapaw ang ilog sa mabababang lugar"],
+                    "0837": ["Signal No. 1", "Malakas na hangin sa loob ng 36 na oras"], "1374": ["Abiso sa baha", "Tumataas ang ilog, maging alerto"] };
+  const CLS = I18N.en.cls;
+  const STOPS = [[2, "2 hours"], [6, "6 hours"], [12, "12 hours"], [24, "24 hours"], [0, "Until removed"]];
+  let lang = "en";
+  const L = () => I18N[lang];
+
+  // ---- Offline town pack: names, schematic map and site lists. SMS replies only carry codes that point into it.
+  // Map coordinates use a 360 x 520 drawing; the town sits in the lower half, open sea and the storm in the upper right.
+  const TOWNS = [
+    { code: "0412", name: "Batangas City", aliases: ["BATANGAS", "BATANGAS CITY"], w: "2", r: 3, g: 75, t: "0800",
+      warn: "Signal No. 2", warnSub: "Gale-force winds within 24 hours", ann: { evac: 1, cls: 1, notice: "", posted: 450, stops: 810 },
+      storm: { at: [232, 170], track: [[300, 300], [282, 262], [262, 228], [246, 198]] },
+      flood: [{ name: "Riverbank zone", lvl: "H", now: "F" }, { name: "Coastal strip", lvl: "H", now: "W" }, { name: "Market area", lvl: "M", now: "W" }, { name: "Upland barangays", lvl: "L", now: "C" }],
+      sites: [{ name: "Central School", st: "O", pct: 72 }, { name: "City Gym", st: "O", pct: 40 }, { name: "Parish Hall", st: "F", pct: 100 }],
+      roads: [{ name: "National highway", st: "O" }, { name: "Riverside road", st: "X" }, { name: "Port access road", st: "L" }],
+      map: { river: "M170,150 C160,200 190,240 160,280 C140,310 150,330 150,360", zones: [[166, 250, 30, 18], [110, 330, 46, 12], [240, 300, 30, 16], [70, 240, 38, 20]] } },
+    { code: "0517", name: "Naga City", aliases: ["NAGA", "NAGA CITY"], w: "F", r: 4, g: 55, t: "0745",
+      warn: "Flood advisory", warnSub: "Rivers may overflow in low-lying areas", ann: { evac: 1, cls: 2, notice: "", posted: 440, stops: 800 },
+      storm: { at: [238, 162], track: [[306, 288], [288, 252], [268, 220], [252, 190]] },
+      flood: [{ name: "Riverside barangays", lvl: "H", now: "F" }, { name: "Downtown low area", lvl: "H", now: "F" }, { name: "Bypass road area", lvl: "M", now: "W" }, { name: "Hillside barangays", lvl: "L", now: "C" }],
+      sites: [{ name: "City Sports Complex", st: "O", pct: 85 }, { name: "Central School", st: "F", pct: 100 }, { name: "Barangay Covered Court", st: "O", pct: 30 }],
+      roads: [{ name: "Main bridge", st: "X" }, { name: "Diversion road", st: "L" }, { name: "North highway", st: "O" }],
+      map: { river: "M0,262 C70,240 130,296 200,284 C240,278 270,262 300,266", zones: [[90, 262, 36, 18], [196, 300, 34, 18], [262, 236, 30, 16], [76, 330, 40, 18]] } },
+    { code: "0837", name: "Tacloban City", aliases: ["TACLOBAN", "TACLOBAN CITY"], w: "1", r: 2, g: 45, t: "0800",
+      warn: "Signal No. 1", warnSub: "Strong winds within 36 hours", ann: { evac: 0, cls: 0, notice: "", posted: null, stops: null },
+      storm: { at: [244, 156], track: [[310, 280], [292, 244], [274, 212], [258, 182]] },
+      flood: [{ name: "Coastal barangays", lvl: "H", now: "W" }, { name: "Downtown", lvl: "M", now: "C" }, { name: "Airport road area", lvl: "M", now: "C" }, { name: "Upland barangays", lvl: "L", now: "C" }],
+      sites: [{ name: "Convention Center", st: "O", pct: 10 }, { name: "Central School", st: "O", pct: 5 }],
+      roads: [{ name: "Coastal road", st: "L" }, { name: "Downtown streets", st: "O" }, { name: "Airport road", st: "O" }],
+      map: { river: "M244,150 C230,200 258,240 238,300", zones: [[156, 330, 60, 12], [200, 282, 30, 18], [100, 290, 34, 18], [82, 238, 40, 18]] } },
+    { code: "1374", name: "Marikina City", aliases: ["MARIKINA", "MARIKINA CITY"], w: "F", r: 3, g: 40, t: "0730",
+      warn: "Flood advisory", warnSub: "River level rising, stay alert", ann: { evac: 1, cls: 1, notice: "", posted: 455, stops: 815 },
+      storm: { at: [228, 176], track: [[296, 306], [278, 268], [258, 234], [242, 204]] },
+      flood: [{ name: "Riverbank barangays", lvl: "H", now: "F" }, { name: "Riverside park area", lvl: "H", now: "F" }, { name: "Low-lying subdivisions", lvl: "M", now: "W" }, { name: "Hillside barangays", lvl: "L", now: "C" }],
+      sites: [{ name: "Barangay Covered Court", st: "F", pct: 100 }, { name: "Elementary School", st: "O", pct: 60 }, { name: "Sports Center", st: "O", pct: 35 }],
+      roads: [{ name: "River bridge", st: "X" }, { name: "Riverside drive", st: "X" }, { name: "Main avenue", st: "L" }, { name: "Hillside road", st: "O" }],
+      map: { river: "M128,150 C100,200 170,250 132,330", zones: [[128, 210, 30, 22], [146, 300, 28, 22], [224, 280, 40, 20], [246, 220, 40, 18]] } }
+  ];
+  // Shared schematic positions for sites and roads; real town packs would carry their own.
+  const SITE_POS = [[80, 300], [220, 250], [270, 330], [120, 220]];
+  const ROAD_PATHS = ["M0,310 C90,300 200,316 360,298", "M210,150 C206,220 222,280 214,380", "M20,200 L340,370", "M300,150 C280,230 300,300 286,380"];
+  for (const t of TOWNS) {
+    t.packFlood = t.flood.map((z) => z.name); t.flood.forEach((z, i) => { z.pi = i + 1; });
+    t.packRoads = t.roads.map((r) => r.name); t.roads.forEach((r, i) => { r.pi = i + 1; });
+  }
+  const byCode = (c) => TOWNS.find((x) => x.code === c);
+
+  // ---- Time helpers
+  let clockMin = 8 * 60 + 15;
+  function fmtTime(hhmm) { let h = parseInt(hhmm.slice(0, 2), 10); const m = hhmm.slice(2); const ap = h >= 12 ? "PM" : "AM"; h = h % 12 || 12; return h + ":" + m + " " + ap; }
+  function clockText(min) { let h = Math.floor(min / 60) % 24; const m = min % 60; h = h % 12 || 12; return h + ":" + String(m).padStart(2, "0"); }
+  const timeText = (min) => clockText(min) + (min % 1440 < 720 ? " AM" : " PM");
+  const nowText = () => timeText(clockMin);
+  const minutesOf = (hhmm) => parseInt(hhmm.slice(0, 2), 10) * 60 + parseInt(hhmm.slice(2), 10);
+  function annCount(t) { return (t.ann.evac ? 1 : 0) + (t.ann.cls ? 1 : 0) + (t.ann.notice ? 1 : 0); }
+  const lcFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+
+  // ---- Server side: town data to NB1 fields
+  function fields(type, t) {
+    if (type === "F") return t.flood.map((z) => "A" + z.pi + z.lvl + z.now + (z.custom ? ":" + z.name.replace(/ /g, "_") : ""));
+    if (type === "E") return t.sites.map((s, i) => "S" + (i + 1) + s.st + s.pct);
+    if (type === "R") return t.roads.map((r) => "R" + r.pi + r.st + (r.custom ? ":" + r.name.replace(/ /g, "_") : ""));
+    const a = t.ann;
+    return ["W" + t.w, "R" + t.r, "G" + t.g, "E" + (a.evac ? a.evac + t.sites[a.evac - 1].st : "0"), "C" + a.cls];
+  }
+  const pack = (type, t) => Codec.encode(type, t.code, fields(type, t), t.t, type === "Q" ? t.ann.notice : "");
+  const requestSms = (type, t) => "NB1 ASK " + type + " " + t.code;
+
+  // ---- Plain-text replies for keyword SMS on any phone
+  function keywordReply(type, t) {
+    const issued = " Issued " + fmtTime(t.t) + ".";
+    if (type === "F") {
+      const fl = t.flood.filter((z) => z.now === "F").map((z) => z.name), wa = t.flood.filter((z) => z.now === "W").map((z) => z.name);
+      let s = "NIMBUS " + t.name + " flood areas:";
+      if (fl.length) s += " FLOODING " + fl.join(", ") + ".";
+      if (wa.length) s += " WATCH " + wa.join(", ") + ".";
+      return s + (fl.length || wa.length ? " Others clear." : " All clear.") + issued;
+    }
+    if (type === "E") return "NIMBUS " + t.name + " evac: " + t.sites.map((s) => s.name + (s.st === "F" ? " FULL" : s.st === "X" ? " CLOSED" : " " + s.pct + "% full")).join(", ") + "." + issued;
+    if (type === "R") {
+      const by = (st) => t.roads.filter((r) => r.st === st).map((r) => r.name), out = [];
+      if (by("X").length) out.push("CLOSED " + by("X").join(", ") + ".");
+      if (by("L").length) out.push("LIGHT VEHICLES ONLY " + by("L").join(", ") + ".");
+      if (by("O").length) out.push("OPEN " + by("O").join(", ") + ".");
+      return "NIMBUS " + t.name + " roads: " + out.join(" ") + issued;
+    }
+    const a = t.ann;
+    const build = (withAlt) => {
+      let s = "NIMBUS " + t.name + ": " + t.warn + ". " + I18N.en.rain[t.r] + ", gusts " + t.g + " km/h.";
+      if (a.evac) {
+        const site = t.sites[a.evac - 1], alt = withAlt && t.sites.find((x, i) => i !== a.evac - 1 && x.st === "O");
+        s += site.st === "O" ? " Evac: " + site.name + "." : " Evac: " + site.name + (site.st === "F" ? " full" : " closed") + (alt ? ", use " + alt.name : "") + ".";
+      }
+      if (a.cls) s += " No classes, " + lcFirst(CLS[a.cls]) + ".";
+      if (a.notice) s += " " + a.notice + (/[.!?]$/.test(a.notice) ? "" : ".");
+      return s + issued;
+    };
+    const full = build(true);
+    return full.length <= 160 ? full : build(false);
+  }
+  const HELP = "NIMBUS: Text NIMBUS <TOWN> for storm updates. Add FLOOD, EVAC or ROAD for more, e.g. NIMBUS FLOOD NAGA CITY.";
+  const KW = { FLOOD: "F", FLOODS: "F", EVAC: "E", EVACUATION: "E", ROAD: "R", ROADS: "R" };
+
+  function steps(type, t) {
+    const time = fmtTime(t.t);
+    if (type === "F") { const n = t.flood.filter((z) => z.now === "F").length; const o = [["Hazard zones: " + t.flood.length + ", from offline town pack"], ["Flood reports merged (LGU, " + time + ")"]]; if (n) o.push([plural(n, "area", "areas") + " flooding now", "warn"]); return o; }
+    if (type === "E") { const n = t.sites.filter((s) => s.st !== "O").length; const o = [["Evacuation sites: " + t.sites.length + ", occupancy from LGU (" + time + ")"]]; if (n) o.push([plural(n, "site", "sites") + " full or closed", "warn"]); return o; }
+    if (type === "R") { const n = t.roads.filter((r) => r.st === "X").length; const o = [["Roads tracked: " + t.roads.length + ", LGU reports (" + time + ")"]]; if (n) o.push([plural(n, "road", "roads") + " closed", "warn"]); return o; }
+    const o = [["Latest alert from PAGASA feed (sample, " + time + ")"], ["Signature on feed alert checked"]];
+    const n = annCount(t); if (n) o.push([n === 1 ? "LGU announcement attached" : n + " LGU announcements attached", "warn"]);
+    return o;
+  }
+
+  // ---- App state
+  const state = { type: "Q", town: "0412", pane: "latest", raw: false, busy: false, viewing: null };
+  const latest = {};      // "Q0412" -> { sms, received }
+  const saved = [];       // newest first, the SMS exactly as it arrived
+  const stats = { req: 214, sent: 214, queue: 0 };
+
+  // ---- Map: blue isometric blocks, the town's river and overlays for the selected tab
+  function seeded(seed) { let s = seed; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
+  const mapCache = {};
+  function baseMap(t) {
+    if (mapCache[t.code]) return mapCache[t.code];
+    const rnd = seeded(parseInt(t.code, 10) + 7);
+    let s = '<rect width="360" height="800" fill="var(--map-ground)"/>';
+    s += '<path d="M190,0 H360 V250 C336,214 300,178 268,150 C236,120 206,70 190,0 Z" fill="var(--map-water)" opacity="0.55"/>';
+    for (let i = 0; i < 9; i++) s += '<path d="M' + (206 + i * 18) + ',' + (14 + i * 22) + ' q6,-4 12,0 t12,0" fill="none" stroke="var(--map-top)" stroke-width="1.5" opacity="0.6"/>';
+    // Streets, then blocks in rows so nearer blocks overlap farther ones
+    s += '<g stroke="var(--map-road)" stroke-width="6" stroke-linecap="round" opacity="0.9">';
+    for (let y = 150; y < 800; y += 46) s += '<line x1="0" y1="' + y + '" x2="' + (y < 250 ? 200 : 360) + '" y2="' + (y + 40) + '"/>';
+    s += '</g>';
+    const blocks = [];
+    for (let row = 0; row < 26; row++) {
+      for (let col = 0; col < 9; col++) {
+        const x = col * 42 + (row % 2) * 21 + 8, y = 132 + row * 26;
+        if (y < 250 && x > 176) continue;
+        if (rnd() < 0.5) continue;
+        blocks.push([x, y, 5 + Math.floor(rnd() * 14), 12 + Math.floor(rnd() * 5)]);
+      }
+    }
+    for (const [x, y, h, w] of blocks) {
+      const d = w * 0.55;
+      s += '<path d="M' + x + ',' + y + ' l' + w + ',' + (-d) + ' v' + (-h) + ' l' + (-w) + ',' + d + ' z" fill="var(--map-side)"/>' +
+           '<path d="M' + x + ',' + y + ' l' + (-w) + ',' + (-d) + ' v' + (-h) + ' l' + w + ',' + d + ' z" fill="var(--map-side-2)"/>' +
+           '<path d="M' + x + ',' + (y - h) + ' l' + w + ',' + (-d) + ' l' + (-w) + ',' + (-d) + ' l' + (-w) + ',' + d + ' z" fill="var(--map-top)"/>';
+    }
+    return (mapCache[t.code] = s);
+  }
+
+  // Typhoon: one dot with a radial gradient, curved arrows for the counterclockwise wind, an arrow for its heading, and its past track.
+  function stormLayer(t, strong) {
+    const [x, y] = t.storm.at, tr = t.storm.track;
+    let s = '<g opacity="' + (strong ? 1 : 0.45) + '">';
+    s += '<polyline points="' + tr.concat([[x, y]]).map((p) => p.join(",")).join(" ") + '" fill="none" stroke="var(--muted)" stroke-width="2.5" stroke-dasharray="1 8" stroke-linecap="round"/>';
+    tr.forEach((p, i) => { s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="' + (3 + i * 0.6) + '" fill="var(--surface)" stroke="var(--muted)" stroke-width="2"/>'; });
+    s += '<circle cx="' + x + '" cy="' + y + '" r="46" fill="url(#eye)" class="pulse"/>';
+    s += '<g class="spin-slow" fill="none" stroke="#5AA9F5" stroke-width="3" stroke-linecap="round">';
+    for (let i = 0; i < 4; i++) {
+      const a = (i * 90) * Math.PI / 180, r = 34;
+      const a2 = a - 0.75;
+      const x1 = x + r * Math.cos(a), y1 = y + r * Math.sin(a), x2 = x + r * Math.cos(a2), y2 = y + r * Math.sin(a2);
+      const hx = x2 + 7 * Math.cos(a2 - Math.PI / 2 + 0.6), hy = y2 + 7 * Math.sin(a2 - Math.PI / 2 + 0.6);
+      const kx = x2 + 7 * Math.cos(a2 + 0.4), ky = y2 + 7 * Math.sin(a2 + 0.4);
+      s += '<path d="M' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' A' + r + ',' + r + ' 0 0 0 ' + x2.toFixed(1) + ',' + y2.toFixed(1) + '"/>';
+      s += '<path d="M' + hx.toFixed(1) + ',' + hy.toFixed(1) + ' L' + x2.toFixed(1) + ',' + y2.toFixed(1) + ' L' + kx.toFixed(1) + ',' + ky.toFixed(1) + '"/>';
+    }
+    s += '</g>';
+    s += '<circle cx="' + x + '" cy="' + y + '" r="9" fill="var(--primary)" stroke="var(--surface)" stroke-width="3"/>';
+    // Heading: west-northwest, away from the track
+    s += '<path d="M' + (x - 14) + ',' + (y - 6) + ' L' + (x - 62) + ',' + (y - 26) + '" stroke="var(--primary)" stroke-width="3.5" stroke-linecap="round" marker-end="url(#head)"/>';
+    s += '</g>';
+    return s;
+  }
+
+  function townPin(label) {
+    return '<g transform="translate(160,282)"><path d="M0,0 C-12,-14 -16,-22 -16,-30 A16,16 0 1 1 16,-30 C16,-22 12,-14 0,0 Z" fill="var(--primary)" stroke="var(--surface)" stroke-width="3"/>' +
+      '<circle cx="0" cy="-30" r="6" fill="var(--surface)"/>' +
+      '<rect x="-' + (label.length * 3.6 + 10) + '" y="6" width="' + (label.length * 7.2 + 20) + '" height="22" rx="11" fill="var(--surface)"/>' +
+      '<text x="0" y="21" text-anchor="middle" font-size="11.5" font-weight="700" fill="var(--text)" font-family="Inter, sans-serif">' + esc(label) + '</text></g>';
+  }
+  const LV = { H: "var(--danger)", M: "var(--warning)", L: "var(--ok)" };
+  function badge(x, y, n, color) {
+    return '<circle cx="' + x + '" cy="' + y + '" r="11" fill="' + color + '" stroke="var(--surface)" stroke-width="2.5"/>' +
+      '<text x="' + x + '" y="' + (y + 4) + '" text-anchor="middle" font-size="11.5" font-weight="800" fill="var(--surface)" font-family="Inter, sans-serif">' + n + '</text>';
+  }
+
+  // Overlays use what the last reply said, so the map never shows data the phone hasn't received.
+  function renderMap() {
+    const t = byCode(state.town), d = currentReply();
+    let s = '<svg viewBox="0 0 360 800" preserveAspectRatio="xMidYMin slice" role="img" aria-label="Schematic map of ' + esc(t.name) + '">';
+    s += '<defs><radialGradient id="eye"><stop offset="0" stop-color="var(--surface)" stop-opacity="0.95"/><stop offset="0.35" stop-color="var(--primary)" stop-opacity="0.55"/><stop offset="1" stop-color="var(--primary)" stop-opacity="0"/></radialGradient>' +
+         '<marker id="head" markerWidth="8" markerHeight="8" viewBox="0 0 10 10" refX="7" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--primary)"/></marker></defs>';
+    s += baseMap(t);
+    // Town features are drawn in town-pack coordinates and scaled into the open area between the side controls.
+    s += '<g transform="translate(40,-10) scale(0.85)"><path d="' + t.map.river + '" fill="none" stroke="var(--map-water)" stroke-width="12" stroke-linecap="round"/>';
+    if (d && d.type === "F") {
+      for (const it of d.items) {
+        const z = !it.customName && t.map.zones[it.index - 1]; if (!z) continue;
+        s += '<ellipse' + (it.now === "F" ? ' class="zone-pulse"' : "") + ' cx="' + z[0] + '" cy="' + z[1] + '" rx="' + z[2] + '" ry="' + z[3] + '" fill="' + LV[it.level] + '" fill-opacity="0.3" stroke="' + LV[it.level] + '" stroke-width="' + (it.now === "F" ? 3 : 1.5) + '"' + (it.now === "C" ? ' stroke-dasharray="4 3"' : "") + '/>';
+        s += badge(z[0], z[1], it.index, LV[it.level]);
+      }
+    }
+    if (d && d.type === "R") {
+      const col = { O: "var(--ok)", L: "var(--warning)", X: "var(--danger)" };
+      d.items.forEach((it) => { const p = !it.customName && ROAD_PATHS[it.index - 1]; if (p) s += '<path d="' + p + '" fill="none" stroke="' + col[it.status] + '" stroke-width="6" stroke-linecap="round"' + (it.status === "X" ? ' stroke-dasharray="10 7"' : "") + '/>'; });
+      d.items.forEach((it) => { const p = !it.customName && ROAD_PATHS[it.index - 1]; if (p) { const m = /M(-?\d+),(-?\d+)/.exec(p); s += badge(Math.max(14, +m[1] + 14), +m[2] + 4, it.index, col[it.status]); } });
+    }
+    if (d && d.type === "E") {
+      d.items.forEach((it) => { const p = SITE_POS[it.index - 1]; if (!p) return; const c = it.status !== "O" ? "var(--danger)" : it.percentFull >= 85 ? "var(--warning)" : "var(--ok)";
+        s += '<rect x="' + (p[0] - 14) + '" y="' + (p[1] - 14) + '" width="28" height="28" rx="9" fill="' + c + '" stroke="var(--surface)" stroke-width="2.5"/>' +
+             '<text x="' + p[0] + '" y="' + (p[1] + 4.5) + '" text-anchor="middle" font-size="12" font-weight="800" fill="var(--surface)" font-family="Inter, sans-serif">' + it.index + '</text>'; });
+    }
+    s += '</g>';
+    s += stormLayer(t, state.type === "Q");
+    s += townPin(t.name);
+    $("map").innerHTML = s + '</svg>';
+    $("map-key").innerHTML = L().key[state.type].map((k) => '<span><i style="background:' + k[0] + '"></i>' + esc(k[1]) + '</span>').join("");
+  }
+
+  // ---- Bottom sheet
+  function row(cls, icon, tag, big, sub, pct) {
+    const el = document.createElement("div"); el.className = "row " + cls;
+    el.innerHTML = '<span class="ic">' + icon + '</span><span><span class="tag"></span><span class="big"></span><span class="sub"></span>' + (pct != null ? '<span class="bar"><i style="width:' + Math.min(100, pct) + '%"></i></span>' : "") + '</span>';
+    el.querySelector(".tag").textContent = tag; el.querySelector(".big").textContent = big; el.querySelector(".sub").textContent = sub;
+    return el;
+  }
+  const num = (n) => String(n);
+
+  function currentReply() {
+    if (state.viewing) return Codec.decode(state.viewing.sms);
+    const l = latest[state.type + state.town];
+    return l ? Codec.decode(l.sms) : null;
+  }
+
+  function renderReply(sms, received, body) {
+    const d = Codec.decode(sms), S = L();
+    if (!d) return;
+    const t = byCode(d.townCode);
+    if (d.type === "Q") {
+      const w = lang === "tl" ? TL_WARN[t.code] : [t.warn, t.warnSub], st = d.storm;
+      body.append(row("danger", ICON.alert, S.officialWarning, w[0], w[1] + " · " + S.issued + " " + fmtTime(d.time)));
+      body.append(row("primary-row", ICON.wind, S.stormMove, S.moving, S.trackNote));
+      body.append(row("", ICON.Q, S.forecast, S.rain[st.rain] + ", " + S.gusts + " " + st.gusts + " km/h", S.generalFor + t.name));
+      let any = false;
+      if (st.evacSite) {
+        const site = t.sites[st.evacSite - 1]; any = true;
+        if (st.evacStatus === "O") body.append(row("ok", ICON.E, S.lguAnn, S.evacTo + site.name, S.siteOpen));
+        else body.append(row("danger", ICON.E, S.lguAnn, site.name + (st.evacStatus === "F" ? S.isFull : S.isClosed), S.findRoom));
+      }
+      if (st.classes) { any = true; body.append(row("warning", ICON.school, S.lguAnn, S.classesSusp, S.cls[st.classes])); }
+      if (d.notice) { any = true; body.append(row("primary-row", ICON.note, S.lguNotice, d.notice, S.fromLgu(t.name))); }
+      if (!any) body.append(row("", ICON.note, S.lguAnn, S.noAnn, S.fromLgu(t.name)));
+    } else if (d.type === "F") {
+      const f = d.items.filter((i) => i.now === "F").length, w = d.items.filter((i) => i.now === "W").length;
+      body.append(row(f ? "danger" : "ok", ICON.F, S.titles.F, S.floodHead(f, w), S.issued + " " + fmtTime(d.time)));
+      for (const it of d.items) {
+        const name = it.customName || t.packFlood[it.index - 1] || "Area " + it.index;
+        body.append(row({ H: "danger", M: "warning", L: "ok" }[it.level], num(it.index), S.level[it.level], name, it.customName ? S.now[it.now] + " · " + S.newArea : S.now[it.now]));
+      }
+    } else if (d.type === "E") {
+      const room = d.items.filter((i) => i.status === "O").length;
+      body.append(row("primary-row", ICON.E, S.titles.E, S.evacHead(room, d.items.length), S.issued + " " + fmtTime(d.time)));
+      for (const it of d.items) {
+        const name = t.sites[it.index - 1] ? t.sites[it.index - 1].name : "Site " + it.index;
+        if (it.status === "F") body.append(row("danger", num(it.index), S.full, name, S.noRoom, 100));
+        else if (it.status === "X") body.append(row("", num(it.index), S.closed, name, S.notTaking));
+        else body.append(row(it.percentFull >= 85 ? "warning" : "ok", num(it.index), it.percentFull >= 85 ? S.almostFull : S.open, name, S.pctFull(it.percentFull), it.percentFull));
+      }
+    } else {
+      const x = d.items.filter((i) => i.status === "X").length, l = d.items.filter((i) => i.status === "L").length;
+      body.append(row(x ? "danger" : l ? "warning" : "ok", ICON.R, S.titles.R, S.roadHead(x, l), S.issued + " " + fmtTime(d.time)));
+      for (const it of d.items) {
+        const name = it.customName || t.packRoads[it.index - 1] || "Road " + it.index;
+        body.append(row({ O: "ok", L: "warning", X: "danger" }[it.status], num(it.index), S.rs[it.status][0], name, it.customName ? S.rs[it.status][1] + " · " + S.newRoad : S.rs[it.status][1]));
+      }
+    }
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.innerHTML = '<span></span><span class="' + (d.valid ? "ok" : "bad") + '"></span>';
+    meta.firstChild.textContent = S.receivedAt + " " + timeText(received);
+    meta.lastChild.textContent = d.valid ? "✓ " + S.sigOk : "✕ " + S.sigBad;
+    body.append(meta);
+    if (state.raw) { const r = document.createElement("div"); r.className = "raw"; r.textContent = sms; body.append(r); }
+  }
+
+  function renderSheet(statusEl) {
+    const S = L(), body = $("sheet-body"), t = byCode(state.town);
+    $("sheet-h").textContent = S.titles[state.type];
+    $("ask-label").textContent = S.cta[state.type];
+    $("hint").textContent = S.hint;
+    $("pane-latest").textContent = S.latest;
+    $("pane-saved").textContent = S.saved(saved.length);
+    for (const b of document.querySelectorAll("[data-pane]")) b.setAttribute("aria-pressed", String(b.dataset.pane === state.pane));
+    body.textContent = "";
+    if (statusEl) body.append(statusEl);
+    if (state.pane === "saved") {
+      if (!saved.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = S.savedEmpty; body.append(e); }
+      for (const it of saved) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "saved-item";
+        b.innerHTML = "<b></b><span></span>";
+        b.firstChild.textContent = S.titles[it.type] + " · " + byCode(it.town).name;
+        b.lastChild.textContent = S.receivedAt + " " + timeText(it.received);
+        b.addEventListener("click", () => openSaved(it));
+        body.append(b);
+      }
+    } else if (state.viewing) {
+      const st = document.createElement("div"); st.className = "status ok"; st.textContent = S.openedSaved; body.append(st);
+      renderReply(state.viewing.sms, state.viewing.received, body);
+    } else {
+      const l = latest[state.type + t.code];
+      if (l) {
+        if (!statusEl) { const st = document.createElement("div"); st.className = "status ok"; st.textContent = S.received; body.append(st); }
+        renderReply(l.sms, l.received, body);
+      } else if (!statusEl) {
+        const e = document.createElement("div"); e.className = "empty";
+        e.innerHTML = "<b></b><span></span>"; e.firstChild.textContent = S.emptyTitle; e.lastChild.textContent = S.emptyBody(S.cta[state.type]);
+        body.append(e);
+      }
+    }
+    renderPill();
+  }
+
+  function renderPill() {
+    const t = byCode(state.town), l = latest["Q" + t.code];
+    const w = lang === "tl" ? TL_WARN[t.code] : [t.warn, t.warnSub];
+    $("pill-title").textContent = w[0];
+    const age = Math.max(0, clockMin - minutesOf(t.t));
+    $("pill-sub").textContent = "Bagyong Ada (sample) · " + fmtTime(t.t);
+    $("pill-fresh").style.width = Math.max(8, 100 - age * 1.2) + "%";
+    $("top-pill").title = l ? "" : "";
+  }
+
+  function renderRail() {
+    const S = L();
+    $("rail").innerHTML = ORDER.map((k) => '<button class="tab" type="button" data-type="' + k + '" aria-pressed="' + (state.type === k) + '">' + ICON[k] + '<span>' + esc(S.tabs[k]) + '</span></button>').join("");
+    for (const b of $("rail").querySelectorAll(".tab")) b.addEventListener("click", () => { if (state.busy) return; state.type = b.dataset.type; state.viewing = null; state.pane = "latest"; renderAll(); });
+  }
+
+  function renderCodes() {
+    const KEYS = {
+      Q: [["NB1", "format version"], ["Q", "storm update"], ["W", "warning level"], ["R", "rain, 0 to 4"], ["G", "gusts, km/h"], ["E", "evac site and status"], ["C", "class suspension"], ["T", "issue time"], ["/", "LGU notice"], ["K", "signature"]],
+      F: [["NB1", "format version"], ["A1", "area 1 in town pack"], ["H M L", "high, medium, low risk"], ["F W C", "flooding, watch, clear"], ["T", "issue time"], ["K", "signature"]],
+      E: [["NB1", "format version"], ["S1", "site 1 in town pack"], ["O F X", "open, full, closed"], ["72", "percent full"], ["T", "issue time"], ["K", "signature"]],
+      R: [["NB1", "format version"], ["R1", "road 1 in town pack"], ["O L X", "open, light only, closed"], ["T", "issue time"], ["K", "signature"]]
+    };
+    $("codes").innerHTML = KEYS[state.type].map((k) => '<span><b>' + esc(k[0]) + '</b>' + esc(k[1]) + '</span>').join("");
+  }
+
+  function renderAll() {
+    const S = L();
+    renderRail(); renderMap(); renderSheet(); renderCodes();
+    $("t-lang").textContent = S.langBtn; $("t-lang").setAttribute("aria-label", S.toLang);
+    $("tagline").textContent = S.tagline;
+    $("handle").setAttribute("aria-label", $("sheet").classList.contains("expanded") ? S.collapse : S.expand);
+  }
+
+  // ---- Ask by SMS
+  function addLog(text, cls) {
+    const r = document.createElement("div"), tm = document.createElement("time"), m = document.createElement("span");
+    tm.textContent = nowText(); m.textContent = text; if (cls) m.className = cls;
+    r.append(tm, m); $("log").append(r); $("log").scrollTop = $("log").scrollHeight;
+  }
+  async function fly(id) {
+    const p = $(id), right = id === "pkt-req";
+    p.style.transition = "none"; p.style.left = right ? "0%" : "100%"; p.style.opacity = "1";
+    void p.offsetWidth; p.style.transition = ""; p.style.left = right ? "100%" : "0%";
+    await wait(1150); p.style.opacity = "0";
+  }
+  function statusEl(cls, text, spin) {
+    const el = document.createElement("div"); el.className = "status " + cls;
+    if (spin) { const s = document.createElement("span"); s.className = "spinner"; el.append(s); }
+    el.append(document.createTextNode(text)); return el;
+  }
+  function updateStats() {
+    $("s-req").textContent = stats.req; $("s-sent").textContent = stats.sent; $("s-queue").textContent = stats.queue;
+    $("s-active").textContent = TOWNS.reduce((n, t) => n + annCount(t), 0);
+  }
+
+  async function ask() {
+    if (state.busy) return;
+    const t = byCode(state.town), type = state.type, S = L();
+    state.busy = true; state.viewing = null; state.pane = "latest"; $("ask").disabled = true;
+    const req = requestSms(type, t);
+    $("req-sms").textContent = req; $("req-count").textContent = req.length + " / 160";
+    $("rep-sms").textContent = ""; $("rep-count").textContent = "0 / 160"; $("rep-meter").style.width = "0";
+    stats.req++; stats.queue++; updateStats();
+    renderSheet(statusEl("", S.sending, true));
+    addLog("SMS in: " + req, "info");
+    await fly("pkt-req");
+    clockMin += 1; $("clock").textContent = clockText(clockMin);
+    renderSheet(statusEl("", S.waiting, true));
+    for (const [text, cls] of steps(type, t)) { await wait(350); addLog(text, cls); }
+    const sms = pack(type, t);
+    await wait(300);
+    addLog("Packed and signed: " + sms.length + " characters, 1 SMS", "ok");
+    $("rep-sms").textContent = sms; $("rep-count").textContent = sms.length + " / 160"; $("rep-meter").style.width = Math.min(100, sms.length / 1.6) + "%";
+    await fly("pkt-rep");
+    stats.sent++; stats.queue--; updateStats();
+    latest[type + t.code] = { sms, received: clockMin };
+    saved.unshift({ type, town: t.code, sms, received: clockMin });
+    if (saved.length > 12) saved.pop();
+    state.busy = false; $("ask").disabled = false;
+    renderMap(); renderSheet();
+  }
+
+  function openSaved(it) {
+    state.type = it.type; state.town = it.town; $("town").value = it.town;
+    state.viewing = it; state.pane = "latest";
+    renderRail(); renderMap(); renderSheet(); renderCodes();
+  }
+
+  // ---- Keyword SMS on any phone
+  function addBubble(text, dir, note) {
+    const b = document.createElement("div"); b.className = "bubble " + dir; b.textContent = text;
+    if (note) { const s = document.createElement("small"); s.textContent = note; b.append(s); }
+    $("thread").append(b); $("thread").scrollTop = $("thread").scrollHeight;
+  }
+  const lengthNote = (s) => s.length <= 160 ? s.length + " / 160 characters" : s.length + " characters, sent as " + Math.ceil(s.length / 153) + " SMS";
+  function matchTown(s) { s = s.trim(); return TOWNS.find((t) => t.aliases.some((a) => s === a || s.startsWith(a + " "))); }
+  function keywordAnswer(q) {
+    const words = q.toUpperCase().replace(/\s+/g, " ").trim().split(" ");
+    if (words[0] !== "NIMBUS") return "NIMBUS: Start your text with NIMBUS. " + HELP.slice(8);
+    if (!words[1] || words[1] === "HELP") return HELP;
+    let type = "Q", rest = words.slice(1);
+    if (KW[rest[0]]) { type = KW[rest[0]]; rest = rest.slice(1); }
+    const t = matchTown(rest.join(" "));
+    if (!t) return "NIMBUS: Town not found. Try BATANGAS, NAGA, TACLOBAN or MARIKINA.";
+    return keywordReply(type, t);
+  }
+  async function sendKeyword(text) {
+    text = text.toUpperCase().trim(); if (!text) return;
+    addBubble(text, "out"); addLog("Keyword SMS in: " + text, "info"); stats.req++; updateStats();
+    await wait(700);
+    const reply = keywordAnswer(text);
+    addBubble(reply, "in", lengthNote(reply)); addLog("Plain-text reply sent, " + lengthNote(reply), "ok"); stats.sent++; updateStats();
+  }
+
+  // ---- LGU console
+  let draftFlood = [], draftRoads = [];
+  function opt(sel, value, label) { const o = document.createElement("option"); o.value = value; o.textContent = label; sel.append(o); }
+  function hideDone() { $("f-done").hidden = true; }
+  function changed() { hideDone(); preview(); }
+  function editRow(kind, item, list) {
+    const r = document.createElement("div"); r.className = "edit-row" + (kind === "roads" ? " road" : "");
+    const n = document.createElement("span"); n.className = "name"; n.textContent = item.name;
+    if (item.custom) { const s = document.createElement("span"); s.className = "new"; s.textContent = "new"; n.append(s); }
+    r.append(n);
+    const sels = kind === "roads" ? [["st", [["O", "Open"], ["L", "Light vehicles only"], ["X", "Closed"]]]]
+                                  : [["lvl", [["H", "High risk"], ["M", "Medium risk"], ["L", "Low risk"]]], ["now", [["F", "Flooding now"], ["W", "Watch"], ["C", "Clear"]]]];
+    for (const [key, opts] of sels) {
+      const sel = document.createElement("select"); sel.setAttribute("aria-label", item.name + " " + (key === "lvl" ? "risk" : "status"));
+      for (const [v, l] of opts) opt(sel, v, l);
+      sel.value = item[key]; sel.addEventListener("change", () => { item[key] = sel.value; changed(); }); r.append(sel);
+    }
+    const x = document.createElement("button"); x.type = "button"; x.className = "x"; x.textContent = "×"; x.setAttribute("aria-label", "Remove " + item.name);
+    x.addEventListener("click", () => { list.splice(list.indexOf(item), 1); drawEditLists(); changed(); });
+    r.append(x); return r;
+  }
+  function drawEditLists() {
+    $("f-flood").textContent = ""; $("f-road").textContent = "";
+    draftFlood.forEach((it) => $("f-flood").append(editRow("flood", it, draftFlood)));
+    draftRoads.forEach((it) => $("f-road").append(editRow("roads", it, draftRoads)));
+  }
+  function addItem(kind) {
+    const input = $(kind === "roads" ? "f-road-new" : "f-flood-new"), name = Codec.cleanNotice(input.value).replace(/[:_]/g, " ").trim();
+    if (!name) { input.focus(); return; }
+    const list = kind === "roads" ? draftRoads : draftFlood;
+    const pi = Math.max(0, ...list.map((i) => i.pi)) + 1;
+    list.push(kind === "roads" ? { name, st: "X", pi, custom: true } : { name, lvl: "H", now: "F", pi, custom: true });
+    input.value = ""; drawEditLists(); changed();
+  }
+  function fillSites(t, ev) {
+    const s = $("f-site"); s.textContent = ""; opt(s, "0", "No evacuation order");
+    t.sites.forEach((x, i) => opt(s, String(i + 1), x.name)); s.value = String(ev || 0); syncSiteStatus();
+  }
+  function syncSiteStatus() { const t = byCode($("f-town").value), v = +$("f-site").value; $("f-sitest").disabled = !v; if (v) $("f-sitest").value = t.sites[v - 1].st; }
+  function loadForm() {
+    const t = byCode($("f-town").value);
+    fillSites(t, t.ann.evac); $("f-cls").value = String(t.ann.cls); $("f-notice").value = t.ann.notice;
+    draftFlood = t.flood.map((z) => ({ ...z })); draftRoads = t.roads.map((r) => ({ ...r }));
+    drawEditLists(); preview();
+  }
+  // A copy of the town with the form's values, so the preview shows exactly what would go out.
+  function draft() {
+    const t = byCode($("f-town").value), ev = +$("f-site").value;
+    const sites = t.sites.map((s, i) => (i + 1 === ev ? { ...s, st: $("f-sitest").value, pct: $("f-sitest").value === "F" ? 100 : s.pct } : s));
+    return { ...t, sites, flood: draftFlood, roads: draftRoads, ann: { ...t.ann, evac: ev, cls: +$("f-cls").value, notice: Codec.cleanNotice($("f-notice").value) } };
+  }
+  function preview() {
+    const d = draft(), kw = keywordReply("Q", d), pk = pack("Q", d);
+    $("p-kw").textContent = kw; $("p-kw-count").textContent = kw.length + " / 160";
+    $("p-pk").textContent = pk; $("p-pk-count").textContent = pk.length + " / 160";
+    const over = pk.length > 160 || kw.length > 160;
+    $("p-fit").className = "fit" + (over ? " over" : "");
+    $("p-fit").textContent = over ? "Too long for one SMS. Shorten the notice or remove an item." : "Fits in one SMS on any phone.";
+    const left = 80 - $("f-notice").value.length;
+    $("f-left").className = "left" + (left < 10 ? " over" : ""); $("f-left").textContent = left + " characters left";
+    $("p-types").innerHTML = ORDER.map((k) => { const n = Math.max(pack(k, d).length, keywordReply(k, d).length); return '<li' + (n > 160 ? ' class="over"' : "") + '><span>' + esc(I18N.en.titles[k]) + '</span><b>' + n + ' / 160</b></li>'; }).join("");
+    $("publish").disabled = over;
+  }
+  function publish(e) {
+    e.preventDefault();
+    const t = byCode($("f-town").value), d = draft(), stop = +$("f-stop").value;
+    t.sites = d.sites; t.flood = draftFlood.map((z) => ({ ...z })); t.roads = draftRoads.map((r) => ({ ...r }));
+    t.ann = { ...d.ann, posted: clockMin, stops: stop ? clockMin + stop * 60 : null };
+    addLog("LGU published update for " + t.name, "warn");
+    $("f-done-text").textContent = "Published. The next reply for " + t.name + " includes it.";
+    $("f-done").hidden = false; $("f-test").dataset.town = t.code;
+    drawTable(); updateStats(); preview(); renderMap();
+  }
+  function removeAnn(t, kind) {
+    if (kind === "evac") t.ann.evac = 0; if (kind === "cls") t.ann.cls = 0; if (kind === "notice") t.ann.notice = "";
+    drawTable(); updateStats(); if ($("f-town").value === t.code) loadForm();
+  }
+  function drawTable() {
+    const body = $("ann-body"); body.textContent = "";
+    for (const t of TOWNS) {
+      const rows = [];
+      if (t.ann.evac) { const s = t.sites[t.ann.evac - 1]; rows.push(["evac", "Evacuation", s.name + (s.st === "O" ? "" : s.st === "F" ? " (full)" : " (closed)")]); }
+      if (t.ann.cls) rows.push(["cls", "Classes", CLS[t.ann.cls]]);
+      if (t.ann.notice) rows.push(["notice", "Notice", t.ann.notice]);
+      for (const [kind, type, detail] of rows) {
+        const tr = document.createElement("tr");
+        const cells = [t.name, null, detail, t.ann.posted != null ? timeText(t.ann.posted) : "—", t.ann.stops != null ? timeText(t.ann.stops) : "Until removed"];
+        cells.forEach((c, i) => { const td = document.createElement("td"); if (i === 1) td.innerHTML = '<span class="chip">' + type + '</span>'; else td.textContent = c; if (i >= 3) td.className = "when"; tr.append(td); });
+        const td = document.createElement("td"), b = document.createElement("button"); b.type = "button"; b.className = "remove"; b.textContent = "Remove";
+        b.setAttribute("aria-label", "Remove " + type.toLowerCase() + " announcement for " + t.name); b.addEventListener("click", () => removeAnn(t, kind));
+        td.append(b); tr.append(td); body.append(tr);
+      }
+    }
+    if (!body.children.length) body.innerHTML = '<tr><td colspan="6" class="none">No active announcements</td></tr>';
+  }
+
+  // ---- Views and settings
+  function route() {
+    const lgu = location.hash === "#lgu";
+    $("view-res").hidden = lgu; $("view-lgu").hidden = !lgu;
+    $("tab-res").toggleAttribute("aria-current", !lgu); $("tab-lgu").toggleAttribute("aria-current", lgu);
+    if (!lgu) $("tab-res").setAttribute("aria-current", "page"); else $("tab-lgu").setAttribute("aria-current", "page");
+  }
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked */ } }
+  function recall(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function setLang(l) {
+    lang = l; store("nimbus-lang", l);
+    for (const b of document.querySelectorAll("[data-lang]")) b.setAttribute("aria-pressed", String(b.dataset.lang === l));
+    document.documentElement.lang = l === "tl" ? "tl" : "en";
+    renderAll();
+  }
+  function closeSettings() { $("settings").hidden = true; $("gear").setAttribute("aria-expanded", "false"); }
+
+  // ---- Wire up
+  for (const t of TOWNS) { opt($("town"), t.code, t.name); opt($("f-town"), t.code, t.name); }
+  CLS.forEach((c, i) => opt($("f-cls"), String(i), c));
+  STOPS.forEach(([h, l]) => opt($("f-stop"), String(h), l)); $("f-stop").value = "12";
+  $("town").addEventListener("change", () => { state.town = $("town").value; state.viewing = null; renderMap(); renderSheet(); });
+  $("ask").addEventListener("click", ask);
+  for (const b of document.querySelectorAll("[data-pane]")) b.addEventListener("click", () => { state.pane = b.dataset.pane; if (state.pane === "latest") state.viewing = null; renderMap(); renderSheet(); });
+  $("handle").addEventListener("click", () => { const ex = $("sheet").classList.toggle("expanded"); $("handle").setAttribute("aria-expanded", String(ex)); $("handle").setAttribute("aria-label", ex ? L().collapse : L().expand); });
+  $("t-raw").addEventListener("click", () => { state.raw = !state.raw; $("t-raw").setAttribute("aria-pressed", String(state.raw)); renderSheet(); });
+  $("t-lang").addEventListener("click", () => setLang(lang === "en" ? "tl" : "en"));
+  $("compose").addEventListener("submit", (e) => { e.preventDefault(); sendKeyword($("kw").value); });
+  for (const b of document.querySelectorAll(".examples button")) b.addEventListener("click", () => { $("kw").value = b.dataset.kw; sendKeyword(b.dataset.kw); });
+  $("f-town").addEventListener("change", () => { hideDone(); loadForm(); });
+  $("f-site").addEventListener("change", () => { syncSiteStatus(); changed(); });
+  for (const id of ["f-sitest", "f-cls", "f-stop"]) $(id).addEventListener("change", changed);
+  $("f-notice").addEventListener("input", changed);
+  $("lgu-form").addEventListener("submit", publish);
+  $("f-flood-add").addEventListener("click", () => addItem("flood"));
+  $("f-road-add").addEventListener("click", () => addItem("roads"));
+  for (const [id, kind] of [["f-flood-new", "flood"], ["f-road-new", "roads"]]) $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addItem(kind); } });
+  $("f-test").addEventListener("click", () => { state.town = $("f-test").dataset.town; state.type = "Q"; $("town").value = state.town; location.hash = "#residents"; renderAll(); ask(); });
+  $("gear").addEventListener("click", () => { const open = $("settings").hidden; $("settings").hidden = !open; $("gear").setAttribute("aria-expanded", String(open)); });
+  document.addEventListener("click", (e) => { if (!$("settings").hidden && !e.target.closest(".settings-wrap")) closeSettings(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("settings").hidden) { closeSettings(); $("gear").focus(); } });
+  for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
+  window.addEventListener("hashchange", route);
+
+  // Start from a finished exchange so the first screen shows a real reply.
+  lang = recall("nimbus-lang") === "tl" ? "tl" : "en";
+  for (const b of document.querySelectorAll("[data-lang]")) b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+  const first = byCode("0412");
+  $("town").value = first.code; $("f-town").value = first.code;
+  const firstSms = pack("Q", first);
+  latest["Q" + first.code] = { sms: firstSms, received: clockMin };
+  saved.push({ type: "Q", town: first.code, sms: firstSms, received: clockMin });
+  $("req-sms").textContent = requestSms("Q", first); $("req-count").textContent = requestSms("Q", first).length + " / 160";
+  $("rep-sms").textContent = firstSms; $("rep-count").textContent = firstSms.length + " / 160"; $("rep-meter").style.width = Math.min(100, firstSms.length / 1.6) + "%";
+  addLog("SMS in: " + requestSms("Q", first), "info");
+  for (const [text, cls] of steps("Q", first)) addLog(text, cls);
+  addLog("Packed and signed: " + firstSms.length + " characters, 1 SMS", "ok");
+  addBubble("NIMBUS NAGA CITY", "out"); const k0 = keywordReply("Q", byCode("0517")); addBubble(k0, "in", lengthNote(k0));
+  route(); loadForm(); drawTable(); updateStats(); renderAll();
+})();
+</script>
