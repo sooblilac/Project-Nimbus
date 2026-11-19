@@ -1,3 +1,5 @@
+#backend packer
+
 from datetime import datetime
 
 TYPE = "S" #Type of message, S for storm.
@@ -13,10 +15,10 @@ def pack_storm(town_code, issued_at, warning_level, rain, gusts_kph):
     if type(rain) is not int or not 0 <= rain <= 4:
         raise PackError("rain must be an integer from 0 to 4")
 
-    if type(gusts_kph) is not int or not 0 <= gusts_kph <= 300:
-        raise PackError("gusts_kph must be an integer from 0 to 300")
+    if type(gusts_kph) is not int or not 0 <= gusts_kph <= 500:
+        raise PackError("gusts_kph must be an integer from 0 to 500")
 
-#NB1 can used for identification of the message.
+#NB1 can used for identification of the message, and K is used to identify the checksum.
     body = (
         f"NB1 {TYPE} {town_code} W{warning_level} R{rain} "
         f"G{gusts_kph} T{issued_at:%H%M}"

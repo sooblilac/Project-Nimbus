@@ -1,8 +1,9 @@
+#frontend unpacker
+
 import re
 from datetime import time
 
 TYPE = "S"
-
 
 class UnpackError(ValueError):
     """The message is corrupted, or isn't a storm message we understand."""
