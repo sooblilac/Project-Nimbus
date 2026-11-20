@@ -1,21 +1,36 @@
 import json
+from pathlib import Path
+import subprocess
+import json
 import re
 from datetime import datetime
 
 from pack_storm import pack_storm
 
 
+def main():
+    data = load_bulletin()
+    print(data)
+
 class BulletinError(ValueError):
     """The bulletin is missing something we need, or it isn't in the shape we expect."""
 
 
-def load_bulletin(path):
-    # No active storm means no bulletin file, so a missing file is a normal case.
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise BulletinError(f"cannot read the bulletin at {path}: {e}") from e
+def load_bulletin():
+    base_dir = Path(__file__).resolve().parent
+    path_to_file = base_dir / "pagasa_parser" / "output" / "bulletin.pdf"
+    path_to_json = base_dir / "pagasa_parser" / "output" / "bulletin.json"
+    bat_path = base_dir / "pagasa_parser" / "poll.bat"
+
+    if path_to_file.is_file():
+        try:
+            result = subprocess.run([bat_path], shell=True, check=True)
+            with open("path_to_json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print("DATA POLLED")
+            return data
+        except Exception as e:
+            print("COULD NOT POLL")
 
 
 def issued_at(bulletin):
@@ -48,3 +63,5 @@ def gusts_kph(bulletin):
 def storm_reply(town_code, bulletin, rain):
     """The storm reply for one town. `rain` is the 0-4 rain level (the bulletin does not provide one)."""
     return pack_storm(town_code, issued_at(bulletin), warning_level(bulletin), rain, gusts_kph(bulletin))
+
+main()
