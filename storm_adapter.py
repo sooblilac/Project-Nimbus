@@ -4,6 +4,7 @@ import subprocess
 import json
 import re
 from datetime import datetime
+import shutil
 
 from pack_storm import pack_storm
 
@@ -15,22 +16,46 @@ def main():
 class BulletinError(ValueError):
     """The bulletin is missing something we need, or it isn't in the shape we expect."""
 
-
 def load_bulletin():
     base_dir = Path(__file__).resolve().parent
-    path_to_file = base_dir / "pagasa_parser" / "output" / "bulletin.pdf"
     path_to_json = base_dir / "pagasa_parser" / "output" / "bulletin.json"
     bat_path = base_dir / "pagasa_parser" / "poll.bat"
 
-    if path_to_file.is_file():
+    if path_to_json.is_file():
+        print("DATA ALREADY EXISTS")
+    else:
         try:
-            result = subprocess.run([bat_path], shell=True, check=True)
-            with open("path_to_json", "r", encoding="utf-8") as f:
-                data = json.load(f)
+            subprocess.run([str(bat_path)], check=True, cwd=bat_path.parent)
             print("DATA POLLED")
-            return data
-        except Exception as e:
-            print("COULD NOT POLL")
+        except (subprocess.CalledProcessError, OSError) as e:
+            print(f"COULD NOT POLL ({e}), TRYING ARCHIVE")
+            load_from_archive(base_dir)
+
+    with open(path_to_json, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_from_archive(base_dir):
+    """No active storm: download past bulletins with pagasa-archiver and parse the newest one."""
+    parser_dir = base_dir / "pagasa_parser"
+    archive_dir = parser_dir / "archive"
+    archive_dir.mkdir(exist_ok=True)
+
+    npx = shutil.which("npx")
+    if npx is None:
+        raise BulletinError("npx not found, is Node installed?")
+
+    try:
+        subprocess.run([npx, "--yes", "pagasa-archiver"], check=True, cwd=archive_dir)
+
+        pdfs = sorted(archive_dir.glob("*_TCB#*.pdf"))   # TCBs only, skip advisories
+        if not pdfs:
+            raise BulletinError("the archive had no bulletins to use")
+
+        subprocess.run(["node", "index.js", str(pdfs[-1])], check=True, cwd=parser_dir)
+    except (subprocess.CalledProcessError, OSError) as e:
+        raise BulletinError(f"could not load from the archive: {e}") from e
+    print("DATA FROM ARCHIVE")
 
 
 def issued_at(bulletin):
