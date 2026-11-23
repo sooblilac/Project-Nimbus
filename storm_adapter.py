@@ -10,7 +10,6 @@ class BulletinError(ValueError):
 
 
 def load_bulletin(path):
-    # No active storm means no bulletin file, so a missing file is a normal case.
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)

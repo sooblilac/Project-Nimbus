@@ -3,6 +3,7 @@ import subprocess
 
 
 # Yo kennard all codes go here para organized lets do some functions stuff para organized
+
 def main(): 
     retrieve_data()
 
