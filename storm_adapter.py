@@ -5,7 +5,8 @@ import re
 from datetime import datetime
 import shutil
 
-from pack_storm import pack_storm
+from pack_storm import PackError, pack_storm
+from local_wind import local_impact, WindModelError
 
 
 def main():
@@ -15,7 +16,29 @@ def main():
 class BulletinError(ValueError):
     """The bulletin is missing something we need, or it isn't in the shape we expect."""
 
-def load_bulletin():
+
+def _load_towns():
+    path = Path(__file__).with_name("towns.json")
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            towns = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise BulletinError(f"Could not read town data {path}: {e}") from e
+    return {town["code"]: town for town in towns}
+
+
+TOWNS = _load_towns()
+
+
+def load_bulletin(path=None):
+    if path is not None:
+        # A specific file was given: just read it, no polling
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise BulletinError(f"Could not read bulletin {path}: {e}")
+
     base_dir = Path(__file__).resolve().parent
     path_to_json = base_dir / "pagasa_parser" / "output" / "bulletin.json"
     bat_path = base_dir / "pagasa_parser" / "poll.bat"
@@ -84,9 +107,22 @@ def gusts_kph(bulletin):
     return int(round(g))
 
 
-def storm_reply(town_code, bulletin, rain):
-    """The storm reply for one town. `rain` is the 0-4 rain level (the bulletin does not provide one)."""
-    return pack_storm(town_code, issued_at(bulletin), warning_level(bulletin), rain, gusts_kph(bulletin))
+def storm_reply(code, bulletin, rain=3):
+    try:
+        town = TOWNS[code]
+    except KeyError as e:
+        raise PackError(f"unknown town code {code!r}") from e
+
+    try:
+        impact = local_impact(bulletin, town["lat"], town["lon"])
+        signal = str(impact.signal)
+        gusts = impact.gusts_kph
+    except WindModelError:
+        signal = warning_level(bulletin)
+        gusts = gusts_kph(bulletin)
+
+    return pack_storm(code, issued_at(bulletin), signal, rain, gusts)
+
 
 if __name__ == "__main__":
     main()
