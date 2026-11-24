@@ -8,27 +8,28 @@ import shutil
 from pack_storm import PackError, pack_storm
 from local_wind import local_impact, WindModelError
 
+current = Path(__file__).resolve().parent
+base_dir = current.parent
+
 
 def main():
     data = load_bulletin()
     print(data)
+    TOWNS = load_towns()
+    print(TOWNS)
 
 class BulletinError(ValueError):
     """The bulletin is missing something we need, or it isn't in the shape we expect."""
 
 
-def _load_towns():
-    path = Path(__file__).with_name("towns.json")
+def load_towns():
+    path_to_town = base_dir / "Data" / "towns.json"
     try:
-        with path.open("r", encoding="utf-8") as f:
+        with open(path_to_town, "r", encoding="utf-8") as f:
             towns = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise BulletinError(f"Could not read town data {path}: {e}") from e
     return {town["code"]: town for town in towns}
-
-
-TOWNS = _load_towns()
-
 
 def load_bulletin(path=None):
     if path is not None:
@@ -39,7 +40,6 @@ def load_bulletin(path=None):
         except (OSError, json.JSONDecodeError) as e:
             raise BulletinError(f"Could not read bulletin {path}: {e}")
 
-    base_dir = Path(__file__).resolve().parent
     path_to_json = base_dir / "pagasa_parser" / "output" / "bulletin.json"
     bat_path = base_dir / "pagasa_parser" / "poll.bat"
 

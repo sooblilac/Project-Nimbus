@@ -2,7 +2,11 @@
 
 from datetime import datetime
 
+
 TYPE = "S" #Type of message, S for storm.
+
+
+
 
 class PackError(ValueError):
     """A storm message field is invalid or outside the supported range."""
@@ -25,3 +29,9 @@ def pack_storm(town_code, issued_at, warning_level, rain, gusts_kph):
     )
     checksum = sum(body.encode("ascii")) % 10000
     return f"{body} K{checksum:04d}"
+
+def temp_vowel_reply(received_message: str) -> str:
+    """Temporary helper that counts vowels in an incoming SMS."""
+    vowels = set("aeiouAEIOU")
+    count = sum(1 for ch in str(received_message) if ch in vowels)
+    return f"There are {count} vowels inside the message"
