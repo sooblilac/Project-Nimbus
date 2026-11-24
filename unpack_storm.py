@@ -43,7 +43,7 @@ def unpack_storm(message):
         raise UnpackError("invalid issue time") from e
 
     gusts = int(m["gusts"])
-    if gusts > 300:
+    if gusts > 500:
         raise UnpackError("gust speed out of range")
 
     return {
