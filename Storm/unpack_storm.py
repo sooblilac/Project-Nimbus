@@ -1,11 +1,26 @@
 #frontend unpacker
+import json
 import re
 from datetime import time
+from pathlib import Path
 
 TYPE = "S"
 
 class UnpackError(ValueError):
     """The message is corrupted, or isn't a storm message we understand."""
+
+
+def _load_town_names():
+    path = Path(__file__).resolve().parent.parent / "Data" / "towns.json"
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            towns = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise UnpackError(f"Could not read town data {path}: {e}") from e
+    return {town["code"]: town["name"] for town in towns}
+
+
+TOWN_NAMES = _load_town_names()
 
 
 _MESSAGE = re.compile(
@@ -52,7 +67,8 @@ RAIN_TEXT = {
 def describe_storm(fields, town_names=None):
     """Turn unpacked fields into a readable message.
     `town_names` is an optional {code: name} dict for the app."""
-    town = (town_names or {}).get(fields["town_code"], fields["town_code"])
+    names = TOWN_NAMES if town_names is None else town_names
+    town = names.get(fields["town_code"], fields["town_code"])
     level = fields["warning_level"]
     signal = f"Wind Signal No. {level}" if level else "No wind signal"
     return (
