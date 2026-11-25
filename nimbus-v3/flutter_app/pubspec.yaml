@@ -1,0 +1,29 @@
+name: nimbus
+description: Nimbus storm updates by SMS, no mobile data needed.
+publish_to: none
+version: 3.0.0+1
+
+environment:
+  sdk: ">=3.7.0 <4.0.0"
+  flutter: ">=3.29.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  another_telephony:
+    path: packages/another_telephony
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  maplibre_gl: 0.27.0
+  flutter_secure_storage: ^11.2.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/data/philippine_locations.json
+    - assets/data/philippines_outline.json
+    - assets/images/nmbus_mark.png
