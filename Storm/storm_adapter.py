@@ -7,6 +7,7 @@ import shutil
 
 from .pack_storm import PackError, pack_storm
 from .local_wind import local_impact, WindModelError
+from .rain import rain_level
 
 current = Path(__file__).resolve().parent
 base_dir = current.parent
@@ -110,7 +111,7 @@ def gusts_kph(bulletin):
     return int(round(g))
 
 
-def storm_reply(code, bulletin, rain=3):
+def storm_reply(code, bulletin, rain=None):
     try:
         town = TOWNS[code]
     except KeyError as e:
@@ -123,6 +124,9 @@ def storm_reply(code, bulletin, rain=3):
     except WindModelError:
         signal = warning_level(bulletin)
         gusts = gusts_kph(bulletin)
+
+    if rain is None:
+        rain = rain_level(town["lat"], town["lon"])
 
     return pack_storm(code, issued_at(bulletin), signal, rain, gusts)
 
