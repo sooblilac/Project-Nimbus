@@ -1,5 +1,4 @@
 #frontend unpacker
-
 import re
 from datetime import time
 
@@ -16,22 +15,9 @@ _MESSAGE = re.compile(
 )
 
 
-def unpack_storm(message):
-    """Reverse of pack_storm. Returns a dict of the fields, or raises UnpackError."""
-    message = message.strip()
-
-    body, sep, tail = message.rpartition(" K")
-    # if not sep or not re.fullmatch(r"\d{4}", tail):
-    #     raise UnpackError("missing or malformed checksum")
-
-    # try:
-    #     expected = sum(body.encode("ascii")) % 10000
-    # except UnicodeEncodeError as e:
-    #     raise UnpackError("message contains non-ASCII characters") from e
-    # if expected != int(tail):
-    #     raise UnpackError("checksum mismatch, the message was corrupted")
-
-    m = _MESSAGE.match(body)
+def unpack_storm(message: str) -> str:
+    """Unpack a checksum-free storm message into a readable string."""
+    m = _MESSAGE.fullmatch(message.strip())
     if not m:
         raise UnpackError("message is not in the expected format")
     if m["type"] != TYPE:
@@ -46,14 +32,14 @@ def unpack_storm(message):
     if gusts > 500:
         raise UnpackError("gust speed out of range")
 
-    return {
+    fields = {
         "town_code": m["town"],
         "warning_level": int(m["warning"]),
         "rain": int(m["rain"]),
         "gusts_kph": gusts,
         "issued_time": issued,
     }
-
+    return describe_storm(fields)
 
 RAIN_TEXT = {
     0: "No significant rain",
@@ -74,3 +60,13 @@ def describe_storm(fields, town_names=None):
         f"Gusts up to {fields['gusts_kph']} km/h. "
         f"Issued {fields['issued_time']:%I:%M %p}."
     )
+
+if __name__ == "__main__":
+    import sys
+
+    try:
+        packed = sys.stdin.read()
+        print(unpack_storm(packed))
+    except UnpackError as exc:
+        print(f"Invalid storm message: {exc}", file=sys.stderr)
+        raise SystemExit(1)

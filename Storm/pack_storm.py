@@ -1,18 +1,15 @@
 #backend packer
-
 from datetime import datetime
 
-
 TYPE = "S" #Type of message, S for storm.
-
-
-
 
 class PackError(ValueError):
     """A storm message field is invalid or outside the supported range."""
 
-
 def pack_storm(town_code, issued_at, warning_level, rain, gusts_kph):
+    if not isinstance(town_code, str) or not town_code or any(char.isspace() for char in town_code):
+        raise PackError("town_code must be a non-empty string without whitespace")
+
     if warning_level not in {"0", "1", "2", "3", "4", "5"}:
         raise PackError("warning_level must be a string from 0 to 5")
 
@@ -22,16 +19,14 @@ def pack_storm(town_code, issued_at, warning_level, rain, gusts_kph):
     if type(gusts_kph) is not int or not 0 <= gusts_kph <= 500:
         raise PackError("gusts_kph must be an integer from 0 to 500")
 
-#NB1 can used for identification of the message, and K is used to identify the checksum.
     body = (
         f"NB1 {TYPE} {town_code} W{warning_level} R{rain} "
         f"G{gusts_kph} T{issued_at:%H%M}"
     )
-    checksum = sum(body.encode("ascii")) % 10000
-    return f"{body} K{checksum:04d}"
+    return body
 
 def temp_vowel_reply(received_message: str) -> str:
-    """Temporary helper that counts vowels in an incoming SMS."""
+    """Temporary helper that counts vowels in an incoming_ SMS."""
     vowels = set("aeiouAEIOU")
     count = sum(1 for ch in str(received_message) if ch in vowels)
     return f"There are {count} vowels inside the message"
