@@ -14,6 +14,9 @@ analyzer:
     - build/**
     - web/**
     - android/**
+    - packages/another_telephony/example/**
+    - packages/another_telephony/test/**
+    - packages/another_telephony/coverage/**
 
 linter:
   # The lint rules applied to this project can be customized in the

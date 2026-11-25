@@ -205,6 +205,46 @@
     }
   },
   {
+    "type": "P",
+    "town": "0412",
+    "fields": [
+      "F|F|95|1375634|12105831|Market_crossing"
+    ],
+    "pins": [
+      {
+        "category": "flood",
+        "label": "Market crossing",
+        "latitude": 13.75634,
+        "longitude": 121.05831,
+        "status": "F",
+        "intensity": 95
+      }
+    ],
+    "time": "0800",
+    "notice": "",
+    "sms": "NB1~P~0412~F|F|95|1375634|12105831|Market_crossing~T0800~KBD77",
+    "decoded": {
+      "version": "NB1",
+      "type": "P",
+      "townCode": "0412",
+      "time": "0800",
+      "notice": "",
+      "valid": true,
+      "storm": null,
+      "items": [],
+      "pins": [
+        {
+          "category": "flood",
+          "label": "Market crossing",
+          "latitude": 13.75634,
+          "longitude": 121.05831,
+          "status": "F",
+          "intensity": 95
+        }
+      ]
+    }
+  },
+  {
     "tampered": "NB1 Q 1374 WF R3 G40 E1F C1 T0730 /Bring IDs and water K0000",
     "decoded": {
       "version": "NB1",

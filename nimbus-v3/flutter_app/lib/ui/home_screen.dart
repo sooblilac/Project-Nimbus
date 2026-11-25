@@ -3,134 +3,565 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../codec/nimbus_codec.dart' as codec;
+import '../data/philippine_location.dart';
 import '../data/town_pack.dart';
+import '../lgu/lgu_api.dart';
 import '../sms/sms_service.dart';
+import '../weather/open_meteo_service.dart';
+import 'location_picker.dart';
 import 'storm_map.dart';
 import 'theme.dart';
 
 const _tabs = [
-  ('Q', 'Storm', Icons.cloud_outlined, 'Storm update', 'Get storm update by SMS'),
-  ('F', 'Flood', Icons.waves, 'Flood-prone areas', 'Get flood areas by SMS'),
-  ('E', 'Evac', Icons.home_outlined, 'Evacuation centers', 'Get evacuation centers by SMS'),
-  ('R', 'Roads', Icons.add_road, 'Road status', 'Get road status by SMS'),
+  (
+    'O',
+    'Overview',
+    Icons.dashboard_outlined,
+    'Overview',
+    'Get storm update by SMS',
+  ),
+  (
+    'Q',
+    'Storm',
+    Icons.cloud_outlined,
+    'Storm update',
+    'Get storm update by SMS',
+  ),
+  (
+    'P',
+    'Map pins',
+    Icons.location_on_outlined,
+    'LGU map pins',
+    'Get map pins by SMS',
+  ),
+  ('F', 'Floods', Icons.waves, 'Flood status', 'Get flood areas by SMS'),
+  (
+    'E',
+    'Evac',
+    Icons.home_outlined,
+    'Evacuation centers',
+    'Get evacuation centers by SMS',
+  ),
+  (
+    'C',
+    'Class status',
+    Icons.school_outlined,
+    'Class status',
+    'Get class status by SMS',
+  ),
+  ('R', 'Road status', Icons.add_road, 'Road status', 'Get road status by SMS'),
 ];
-const _rain = ['No rain', 'Light rain', 'Moderate rain', 'Heavy rain', 'Intense rain'];
-const _classes = ['No suspension', 'All levels', 'Preschool to SHS', 'Preschool to grade 10', 'Preschool to grade 6', 'Preschool only'];
-const _level = {'H': 'High flood risk', 'M': 'Medium flood risk', 'L': 'Low flood risk'};
-const _now = {'F': 'Flooding reported now', 'W': 'On watch, water rising nearby', 'C': 'No flooding now'};
-const _road = {'O': ('Open', 'Open to all vehicles'), 'L': ('Light vehicles only', 'Trucks and buses turned back'), 'X': ('Closed', 'Not passable, use another route')};
+const _rain = [
+  'No rain',
+  'Light rain',
+  'Moderate rain',
+  'Heavy rain',
+  'Intense rain',
+];
+const _classes = [
+  'No suspension',
+  'All levels',
+  'Preschool to SHS',
+  'Preschool to grade 10',
+  'Preschool to grade 6',
+  'Preschool only',
+];
+const _level = {
+  'H': 'High flood risk',
+  'M': 'Medium flood risk',
+  'L': 'Low flood risk',
+};
+const _now = {
+  'F': 'Flooding reported now',
+  'W': 'On watch, water rising nearby',
+  'C': 'No flooding now',
+};
+const _road = {
+  'O': ('Open', 'Open to all vehicles'),
+  'L': ('Light vehicles only', 'Trucks and buses turned back'),
+  'X': ('Closed', 'Not passable, use another route'),
+};
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.sms});
+  const HomeScreen({
+    super.key,
+    required this.sms,
+    required this.locations,
+    required this.outline,
+    required this.onBack,
+    required this.onSettings,
+  });
+
   final SmsService sms;
+  final List<PhilippineLocation> locations;
+  final PhilippineOutline outline;
+  final VoidCallback onBack;
+  final VoidCallback onSettings;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String _tab = 'Q';
-  Town _town = towns.first;
+  String _tab = 'O';
+  late PhilippineLocation _location;
+  final _panelController = DraggableScrollableController();
+  final _lguApi = LguApiService();
+  final _weatherService = OpenMeteoService();
   bool _waiting = false;
-  bool _showRaw = false;
+  bool _apiLoading = true;
+  bool _panelExpanded = false;
   bool _showSaved = false;
+  String? _apiError;
+  LguUpdate? _publishedUpdate;
+  List<MapPinUpdate> _smsPins = [];
+  bool _smsPinSnapshotReceived = false;
   List<SavedUpdate> _saved = [];
   SavedUpdate? _viewing;
+  WeatherSnapshot? _weatherFallback;
+  bool _weatherFallbackLoading = false;
+  String? _weatherFallbackError;
+  DateTime? _requestStartedAt;
+  String? _requestTownCode;
+  String? _requestType;
+  int _weatherRequestId = 0;
+  Timer? _weatherFallbackTimer;
   StreamSubscription<SavedUpdate>? _sub;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
-    _sub = widget.sms.replies.listen((u) async {
-      _saved = await widget.sms.saved();
-      if (mounted) setState(() => _waiting = false);
+    _panelController.addListener(_syncPanelExpanded);
+    _location = widget.locations.first;
+    _refreshPublishedUpdate(_location.code);
+    _refreshSmsPins(_location.smsCode);
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshPublishedUpdate(_location.code);
     });
-    widget.sms.saved().then((s) => setState(() => _saved = s));
+    _sub = widget.sms.replies.listen((u) async {
+      final saved = await widget.sms.saved();
+      if (!mounted) return;
+      final isCurrentStormReply =
+          u.type == 'Q' &&
+          u.townCode == _requestTownCode &&
+          _requestStartedAt != null &&
+          !u.received.isBefore(_requestStartedAt!);
+      final isCurrentReply =
+          u.type == _requestType &&
+          u.townCode == _requestTownCode &&
+          _requestStartedAt != null &&
+          !u.received.isBefore(_requestStartedAt!);
+      setState(() {
+        _saved = saved;
+        if (u.type == 'P' && u.townCode == _location.smsCode) {
+          final pinReply = codec.decode(u.sms);
+          if (pinReply != null && pinReply.valid) {
+            _smsPins = [
+              for (final pin in pinReply.pins)
+                MapPinUpdate(
+                  category: pin.category,
+                  label: pin.label,
+                  latitude: pin.latitude,
+                  longitude: pin.longitude,
+                  status: pin.status,
+                  intensity: pin.intensity,
+                ),
+            ];
+            _smsPinSnapshotReceived = true;
+          }
+        }
+        if (isCurrentReply) {
+          _waiting = false;
+          if (isCurrentStormReply) {
+            _weatherFallbackTimer?.cancel();
+            _weatherFallback = null;
+            _weatherFallbackLoading = false;
+            _weatherFallbackError = null;
+          }
+        }
+      });
+    });
+    widget.sms.saved().then((s) {
+      if (mounted) setState(() => _saved = s);
+    });
   }
 
   @override
   void dispose() {
+    _panelController
+      ..removeListener(_syncPanelExpanded)
+      ..dispose();
+    _refreshTimer?.cancel();
+    _weatherFallbackTimer?.cancel();
+    _weatherRequestId++;
     _sub?.cancel();
     super.dispose();
   }
 
-  SavedUpdate? get _latest {
-    if (_viewing != null) return _viewing;
-    for (final u in _saved) {
-      if (u.type == _tab && u.townCode == _town.code) return u;
+  Future<void> _refreshPublishedUpdate(String townCode) async {
+    if (!mounted) return;
+    setState(() {
+      _apiLoading = _publishedUpdate == null;
+      _apiError = null;
+    });
+    try {
+      final update = await _lguApi.fetchTown(townCode);
+      if (!mounted || townCode != _location.code) return;
+      setState(() {
+        _publishedUpdate = update;
+        _apiLoading = false;
+      });
+    } on LguApiException catch (error) {
+      if (!mounted || townCode != _location.code) return;
+      setState(() {
+        _apiError = error.message;
+        _apiLoading = false;
+      });
+    } on FormatException catch (error) {
+      if (!mounted || townCode != _location.code) return;
+      setState(() {
+        _apiError = 'The API returned invalid data: ${error.message}';
+        _apiLoading = false;
+      });
+    }
+  }
+
+  Future<void> _refreshSmsPins(String townCode) async {
+    try {
+      final snapshot = await widget.sms.latestPinSnapshot(townCode);
+      if (!mounted || townCode != _location.smsCode) return;
+      setState(() {
+        _smsPinSnapshotReceived = snapshot != null;
+        _smsPins = [
+          for (final pin in snapshot?.pins ?? const <codec.MapPin>[])
+            MapPinUpdate(
+              category: pin.category,
+              label: pin.label,
+              latitude: pin.latitude,
+              longitude: pin.longitude,
+              status: pin.status,
+              intensity: pin.intensity,
+            ),
+        ];
+      });
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved SMS pin data is invalid: $error')),
+      );
+    }
+  }
+
+  List<MapPinUpdate> get _mapPins =>
+      _smsPinSnapshotReceived
+          ? _smsPins
+          : _publishedUpdate?.mapPins ?? const [];
+
+  void _onLocationChanged(
+    PhilippineLocation location, {
+    bool clearViewing = true,
+  }) {
+    _weatherFallbackTimer?.cancel();
+    _weatherRequestId++;
+    setState(() {
+      _location = location;
+      if (clearViewing) _viewing = null;
+      _publishedUpdate = null;
+      _apiError = null;
+      _apiLoading = true;
+      _waiting = false;
+      _weatherFallback = null;
+      _weatherFallbackLoading = false;
+      _weatherFallbackError = null;
+      _smsPinSnapshotReceived = false;
+      _smsPins = [];
+    });
+    _refreshPublishedUpdate(location.code);
+    _refreshSmsPins(location.smsCode);
+  }
+
+  void _syncPanelExpanded() {
+    if (!_panelController.isAttached) return;
+    final expanded = _panelController.size > 0.22;
+    if (expanded != _panelExpanded && mounted) {
+      setState(() => _panelExpanded = expanded);
+    }
+  }
+
+  void _animatePanel(bool expanded) {
+    if (!_panelController.isAttached) return;
+    unawaited(
+      _panelController.animateTo(
+        expanded ? 0.35 : 0.15,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+
+  void _selectTab(String tab) {
+    setState(() {
+      _tab = tab;
+      _viewing = null;
+      _showSaved = false;
+      _panelExpanded = true;
+    });
+    _animatePanel(true);
+  }
+
+  void _togglePanel() {
+    final expand = !_panelExpanded;
+    setState(() => _panelExpanded = expand);
+    _animatePanel(expand);
+  }
+
+  PhilippineLocation? _locationForCode(String code) {
+    for (final location in widget.locations) {
+      if (location.code == code || location.smsCode == code) return location;
     }
     return null;
   }
 
+  SavedUpdate? get _latest {
+    if (_viewing != null) return _viewing;
+    final smsType = _smsType;
+    for (final u in _saved) {
+      if (u.type == smsType && u.townCode == _location.smsCode) return u;
+    }
+    return null;
+  }
+
+  String get _smsType => _tab == 'O' || _tab == 'C' ? 'Q' : _tab;
+
   Future<void> _ask() async {
+    _weatherFallbackTimer?.cancel();
+    final requestId = ++_weatherRequestId;
+    final requestStartedAt = DateTime.now();
+    final requestLocation = _location;
+    _requestStartedAt = requestStartedAt;
+    _requestTownCode = requestLocation.smsCode;
+    _requestType = _smsType;
     setState(() {
       _waiting = true;
       _viewing = null;
       _showSaved = false;
+      _weatherFallback = null;
+      _weatherFallbackLoading = false;
+      _weatherFallbackError = null;
     });
-    await widget.sms.ask(_tab, _town.code);
+    try {
+      await widget.sms.ask(_smsType, _location.smsCode);
+      if (!mounted || requestId != _weatherRequestId) return;
+      if (_smsType == 'Q') {
+        _weatherFallbackTimer = Timer(const Duration(seconds: 20), () {
+          if (!mounted ||
+              !_waiting ||
+              requestId != _weatherRequestId ||
+              _location.code != requestLocation.code) {
+            return;
+          }
+          final latest = _latest;
+          if (latest != null &&
+              latest.type == 'Q' &&
+              latest.townCode == requestLocation.smsCode &&
+              !latest.received.isBefore(requestStartedAt)) {
+            return;
+          }
+          unawaited(_loadFallbackWeather(requestId, requestLocation));
+        });
+      }
+    } on StateError catch (error) {
+      if (!mounted) return;
+      setState(() => _waiting = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+    }
   }
+
+  Future<void> _loadFallbackWeather(
+    int requestId,
+    PhilippineLocation location,
+  ) async {
+    setState(() {
+      _weatherFallbackLoading = true;
+      _weatherFallbackError = null;
+    });
+    try {
+      final weather = await _weatherService.current(
+        latitude: location.latitude,
+        longitude: location.longitude,
+      );
+      if (!mounted || requestId != _weatherRequestId) return;
+      setState(() {
+        _weatherFallback = weather;
+        _weatherFallbackLoading = false;
+      });
+    } on OpenMeteoException catch (error) {
+      if (!mounted || requestId != _weatherRequestId) return;
+      setState(() {
+        _weatherFallbackLoading = false;
+        _weatherFallbackError = error.message;
+      });
+    }
+  }
+
+  Future<void> _showMapPin(MapPinUpdate pin) => showDialog<void>(
+    context: context,
+    builder:
+        (dialogContext) => AlertDialog(
+          title: Text(pin.label),
+          content: Text(
+            '${switch (pin.category) {
+              'flood' => 'Flood',
+              'evacuation' => 'Evacuation center',
+              _ => 'Road',
+            }} · ${switch (pin.status) {
+              'F' => 'Flooding now / full',
+              'W' => 'Water rising / watch',
+              'C' => 'No flooding now',
+              'O' => 'Open',
+              'L' => 'Light vehicles only',
+              'X' => 'Closed',
+              _ => 'Unknown',
+            }}\n'
+            '${pin.category == 'evacuation' ? 'Occupancy' : 'Severity'}: '
+            '${pin.intensity}%\n'
+            '${pin.latitude.toStringAsFixed(5)}, '
+            '${pin.longitude.toStringAsFixed(5)}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+  );
 
   @override
   Widget build(BuildContext context) {
     final latest = _latest;
     final reply = latest == null ? null : codec.decode(latest.sms);
-    final warning = _town.warnings[reply?.storm?.warning ?? '2'] ?? ('Storm update', '');
+    final town = townForLocation(_location);
+    final warning =
+        town.warnings[reply?.storm?.warning ?? '2'] ?? ('Storm update', '');
+    final activeTab = _tabs.firstWhere((tab) => tab.$1 == _tab);
     return Scaffold(
-      body: Stack(children: [
-        Positioned.fill(child: StormMap(town: _town, tab: _tab, reply: reply)),
-        SafeArea(
-          child: Stack(children: [
-            Align(alignment: Alignment.topCenter, child: _TopPill(title: warning.$1, subtitle: 'Bagyong Ada (sample) · ${_town.name}')),
-            Positioned(left: 12, top: 84, child: _TabRail(selected: _tab, onSelect: (t) => setState(() {
-              _tab = t;
-              _viewing = null;
-            }))),
-            Positioned(
-              right: 12,
-              top: 84,
-              child: _RoundButton(
-                icon: Icons.code,
-                label: 'Show raw SMS',
-                selected: _showRaw,
-                onTap: () => setState(() => _showRaw = !_showRaw),
-              ),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: StormMap(
+              location: _location,
+              outline: widget.outline,
+              floodReported:
+                  _publishedUpdate?.floodAreas.any((a) => a.status == 'F') ??
+                  false,
+              mapPins: _mapPins,
+              onPinTapped: _showMapPin,
+              attributionBottomInset:
+                  MediaQuery.sizeOf(context).height *
+                      (_panelExpanded ? 0.35 : 0.15) +
+                  8,
+              errorOverlayLeftInset: 84,
             ),
-          ]),
-        ),
-        DraggableScrollableSheet(
-          initialChildSize: 0.54,
-          minChildSize: 0.3,
-          maxChildSize: 0.88,
-          builder: (context, scroll) => _Sheet(
-            scroll: scroll,
-            title: _tabs.firstWhere((t) => t.$1 == _tab).$4,
-            cta: _tabs.firstWhere((t) => t.$1 == _tab).$5,
-            town: _town,
-            onTown: (t) => setState(() {
-              _town = t;
-              _viewing = null;
-            }),
-            showSaved: _showSaved,
-            onPane: (saved) => setState(() {
-              _showSaved = saved;
-              if (!saved) _viewing = null;
-            }),
-            saved: _saved,
-            onOpenSaved: (u) => setState(() {
-              _viewing = u;
-              _tab = u.type;
-              _town = townByCode(u.townCode);
-              _showSaved = false;
-            }),
-            waiting: _waiting,
-            latest: latest,
-            reply: reply,
-            showRaw: _showRaw,
-            onAsk: _waiting ? null : _ask,
           ),
-        ),
-      ]),
+          SafeArea(
+            child: Stack(
+              children: [
+                Positioned(
+                  left: 12,
+                  top: 8,
+                  child: _RoundButton(
+                    icon: Icons.arrow_back,
+                    label: 'Back to NIMBUS',
+                    selected: false,
+                    onTap: widget.onBack,
+                  ),
+                ),
+                Positioned(
+                  right: 12,
+                  top: 8,
+                  child: _RoundButton(
+                    icon: Icons.settings_outlined,
+                    label: 'Settings',
+                    selected: false,
+                    onTap: widget.onSettings,
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: _TopPill(
+                    title: _tab == 'Q' ? warning.$1 : activeTab.$4,
+                    subtitle: '${_location.name} · ${_location.region}',
+                  ),
+                ),
+                Positioned(
+                  left: 12,
+                  top: 84,
+                  child: _CategoryDropdown(
+                    selected: _tab,
+                    onSelect: _selectTab,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          DraggableScrollableSheet(
+            controller: _panelController,
+            initialChildSize: 0.15,
+            minChildSize: 0.15,
+            maxChildSize: 0.85,
+            snap: true,
+            snapSizes: const [0.35],
+            builder:
+                (context, scroll) => _Sheet(
+                  scroll: scroll,
+                  expanded: _panelExpanded,
+                  onToggleExpanded: _togglePanel,
+                  selected: _tab,
+                  title: activeTab.$4,
+                  cta: activeTab.$5,
+                  location: _location,
+                  locations: widget.locations,
+                  onLocation: _onLocationChanged,
+                  showSaved: _showSaved,
+                  onPane:
+                      (saved) => setState(() {
+                        _showSaved = saved;
+                        if (!saved) _viewing = null;
+                      }),
+                  saved: _saved,
+                  onOpenSaved: (u) {
+                    final savedLocation = _locationForCode(u.townCode);
+                    setState(() {
+                      _viewing = u;
+                      _tab = u.type;
+                      _showSaved = false;
+                      if (savedLocation != null) _location = savedLocation;
+                    });
+                    if (savedLocation != null) {
+                      _onLocationChanged(savedLocation, clearViewing: false);
+                    }
+                  },
+                  waiting: _waiting,
+                  latest: latest,
+                  reply: reply,
+                  publishedUpdate: _publishedUpdate,
+                  smsPins: _smsPins,
+                  smsPinSnapshotReceived: _smsPinSnapshotReceived,
+                  weatherFallback: _weatherFallback,
+                  weatherFallbackLoading: _weatherFallbackLoading,
+                  weatherFallbackError: _weatherFallbackError,
+                  apiLoading: _apiLoading,
+                  apiError: _apiError,
+                  onRefreshApi: () => _refreshPublishedUpdate(_location.code),
+                  onAsk: _waiting ? null : _ask,
+                ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -142,63 +573,92 @@ class _TopPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(top: 8),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-        width: 240,
-        decoration: _floating(16),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-          Text(subtitle, style: const TextStyle(fontSize: 12, color: NimbusColors.muted), textAlign: TextAlign.center),
-        ]),
-      );
+    margin: const EdgeInsets.only(top: 8),
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+    width: 240,
+    decoration: _floating(context, 16),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        Text(
+          subtitle,
+          style: TextStyle(fontSize: 12, color: context.nimbusPalette.muted),
+          textAlign: TextAlign.center,
+        ),
+      ],
+    ),
+  );
 }
 
-BoxDecoration _floating(double radius) => BoxDecoration(
-      color: NimbusColors.surface,
-      borderRadius: BorderRadius.circular(radius),
-      boxShadow: [BoxShadow(color: NimbusColors.primary.withValues(alpha: 0.14), blurRadius: 14, offset: const Offset(0, 4))],
-    );
+BoxDecoration _floating(BuildContext context, double radius) => BoxDecoration(
+  color: context.nimbusPalette.surface,
+  borderRadius: BorderRadius.circular(radius),
+  boxShadow: [
+    BoxShadow(
+      color: NimbusColors.primary.withValues(alpha: 0.14),
+      blurRadius: 14,
+      offset: const Offset(0, 4),
+    ),
+  ],
+);
 
-class _TabRail extends StatelessWidget {
-  const _TabRail({required this.selected, required this.onSelect});
+class _CategoryDropdown extends StatelessWidget {
+  const _CategoryDropdown({required this.selected, required this.onSelect});
   final String selected;
   final ValueChanged<String> onSelect;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(6),
-        decoration: _floating(22),
-        child: Column(children: [
-          for (final t in _tabs)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Semantics(
-                selected: t.$1 == selected,
-                button: true,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
-                  onTap: () => onSelect(t.$1),
-                  child: Container(
-                    width: 58,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: t.$1 == selected ? NimbusColors.primary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      Icon(t.$3, size: 22, color: t.$1 == selected ? NimbusColors.onPrimary : NimbusColors.muted),
-                      Text(t.$2, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: t.$1 == selected ? NimbusColors.onPrimary : NimbusColors.muted)),
-                    ]),
-                  ),
+  Widget build(BuildContext context) {
+    final active = _tabs.firstWhere((tab) => tab.$1 == selected);
+    return PopupMenuButton<String>(
+      tooltip: 'Choose map information',
+      onSelected: onSelect,
+      itemBuilder:
+          (context) => [
+            for (final tab in _tabs)
+              PopupMenuItem(
+                value: tab.$1,
+                child: Row(
+                  children: [
+                    Icon(tab.$3, size: 20),
+                    const SizedBox(width: 12),
+                    Text(tab.$2),
+                  ],
                 ),
               ),
+          ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: _floating(context, 16),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(active.$3, color: NimbusColors.primary),
+            const SizedBox(width: 8),
+            Text(
+              active.$2,
+              style: const TextStyle(fontWeight: FontWeight.w700),
             ),
-        ]),
-      );
+            const SizedBox(width: 6),
+            const Icon(Icons.arrow_drop_down),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _RoundButton extends StatelessWidget {
-  const _RoundButton({required this.icon, required this.label, required this.selected, required this.onTap});
+  const _RoundButton({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
   final IconData icon;
   final String label;
   final bool selected;
@@ -206,31 +666,39 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: label,
-        child: Material(
-          color: selected ? NimbusColors.primary : NimbusColors.surface,
-          shape: const CircleBorder(),
-          elevation: 3,
-          shadowColor: NimbusColors.primary.withValues(alpha: 0.3),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onTap,
-            child: SizedBox.square(
-              dimension: NimbusSizes.minTap,
-              child: Icon(icon, color: selected ? NimbusColors.onPrimary : NimbusColors.text),
-            ),
+    message: label,
+    child: Material(
+      color: selected ? NimbusColors.primary : context.nimbusPalette.surface,
+      shape: const CircleBorder(),
+      elevation: 3,
+      shadowColor: NimbusColors.primary.withValues(alpha: 0.3),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
+        child: SizedBox.square(
+          dimension: NimbusSizes.minTap,
+          child: Icon(
+            icon,
+            color:
+                selected ? NimbusColors.onPrimary : context.nimbusPalette.text,
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 class _Sheet extends StatelessWidget {
   const _Sheet({
     required this.scroll,
+    required this.expanded,
+    required this.onToggleExpanded,
+    required this.selected,
     required this.title,
     required this.cta,
-    required this.town,
-    required this.onTown,
+    required this.location,
+    required this.locations,
+    required this.onLocation,
     required this.showSaved,
     required this.onPane,
     required this.saved,
@@ -238,15 +706,27 @@ class _Sheet extends StatelessWidget {
     required this.waiting,
     required this.latest,
     required this.reply,
-    required this.showRaw,
+    required this.publishedUpdate,
+    required this.smsPins,
+    required this.smsPinSnapshotReceived,
+    required this.weatherFallback,
+    required this.weatherFallbackLoading,
+    required this.weatherFallbackError,
+    required this.apiLoading,
+    required this.apiError,
+    required this.onRefreshApi,
     required this.onAsk,
   });
 
   final ScrollController scroll;
+  final bool expanded;
+  final VoidCallback onToggleExpanded;
+  final String selected;
   final String title;
   final String cta;
-  final Town town;
-  final ValueChanged<Town> onTown;
+  final PhilippineLocation location;
+  final List<PhilippineLocation> locations;
+  final ValueChanged<PhilippineLocation> onLocation;
   final bool showSaved;
   final ValueChanged<bool> onPane;
   final List<SavedUpdate> saved;
@@ -254,74 +734,406 @@ class _Sheet extends StatelessWidget {
   final bool waiting;
   final SavedUpdate? latest;
   final codec.Reply? reply;
-  final bool showRaw;
+  final LguUpdate? publishedUpdate;
+  final List<MapPinUpdate> smsPins;
+  final bool smsPinSnapshotReceived;
+  final WeatherSnapshot? weatherFallback;
+  final bool weatherFallbackLoading;
+  final String? weatherFallbackError;
+  final bool apiLoading;
+  final String? apiError;
+  final VoidCallback onRefreshApi;
   final VoidCallback? onAsk;
 
   @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: NimbusColors.surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-          boxShadow: [BoxShadow(color: NimbusColors.primary.withValues(alpha: 0.12), blurRadius: 30, offset: const Offset(0, -10))],
-        ),
-        child: Column(children: [
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: context.nimbusPalette.surface,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: NimbusColors.primary.withValues(alpha: 0.12),
+            blurRadius: 30,
+            offset: const Offset(0, -10),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: onToggleExpanded,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 8, 18, 6),
+              child: Column(
+                children: [
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: context.nimbusPalette.line,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        expanded
+                            ? Icons.keyboard_arrow_down
+                            : Icons.keyboard_arrow_up,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
           Expanded(
             child: ListView(
               controller: scroll,
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 12),
+              padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
               children: [
-                Center(child: Container(width: 44, height: 5, decoration: BoxDecoration(color: NimbusColors.line, borderRadius: BorderRadius.circular(9)))),
-                const SizedBox(height: 12),
-                Text(title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<String>(
-                  value: town.code,
-                  decoration: const InputDecoration(labelText: 'Your town'),
-                  items: [for (final t in towns) DropdownMenuItem(value: t.code, child: Text(t.name, style: const TextStyle(fontWeight: FontWeight.w700)))],
-                  onChanged: (code) => onTown(townByCode(code!)),
-                ),
-                const SizedBox(height: 10),
-                SegmentedButton<bool>(
-                  segments: [
-                    const ButtonSegment(value: false, label: Text('Latest')),
-                    ButtonSegment(value: true, label: Text(saved.isEmpty ? 'Saved' : 'Saved (${saved.length})')),
-                  ],
-                  selected: {showSaved},
-                  onSelectionChanged: (s) => onPane(s.first),
-                  style: const ButtonStyle(minimumSize: WidgetStatePropertyAll(Size.fromHeight(NimbusSizes.minTap))),
-                ),
-                const SizedBox(height: 12),
-                ..._content(),
+                if (!expanded)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Tap a category to view details',
+                      style: TextStyle(color: context.nimbusPalette.muted),
+                    ),
+                  ),
+                if (expanded) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Location',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  LocationPicker(
+                    location: location,
+                    locations: locations,
+                    onSelected: onLocation,
+                  ),
+                  const SizedBox(height: 12),
+                  _publishedContent(context),
+                  const SizedBox(height: 10),
+                  SegmentedButton<bool>(
+                    segments: [
+                      const ButtonSegment(value: false, label: Text('Latest')),
+                      ButtonSegment(
+                        value: true,
+                        label: Text(
+                          saved.isEmpty ? 'Saved' : 'Saved (${saved.length})',
+                        ),
+                      ),
+                    ],
+                    selected: {showSaved},
+                    onSelectionChanged: (s) => onPane(s.first),
+                    style: const ButtonStyle(
+                      minimumSize: WidgetStatePropertyAll(
+                        Size.fromHeight(NimbusSizes.minTap),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ..._content(context),
+                ],
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: NimbusColors.surfaceAlt))),
-            child: SafeArea(
-              top: false,
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                FilledButton.icon(onPressed: onAsk, icon: const Icon(Icons.sms_outlined), label: Text(cta)),
-                const SizedBox(height: 6),
-                const Text('One tap sends one text. No mobile data used.', style: TextStyle(fontSize: 13, color: NimbusColors.muted)),
-              ]),
+          if (expanded)
+            Container(
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: context.nimbusPalette.surfaceAlt),
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: onAsk,
+                      icon: const Icon(Icons.sms_outlined),
+                      label: Text(cta),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'One tap sends one text. No mobile data used.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: context.nimbusPalette.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ]),
-      );
+        ],
+      ),
+    );
+  }
 
-  List<Widget> _content() {
+  Widget _publishedContent(BuildContext context) {
+    if (selected == 'P') {
+      final pins =
+          smsPinSnapshotReceived
+              ? smsPins
+              : publishedUpdate?.mapPins ?? const <MapPinUpdate>[];
+      if (pins.isEmpty) {
+        return _Empty(
+          'No map pins in the latest snapshot',
+          'Tap a pin on the map for its status, or request the latest snapshot by SMS.',
+        );
+      }
+      return Column(
+        children: [
+          for (final pin in pins)
+            _Row(
+              Icons.location_on_outlined,
+              pin.intensity >= 70 ? NimbusColors.danger : NimbusColors.warning,
+              switch (pin.category) {
+                'flood' => 'Flood',
+                'evacuation' => 'Evacuation center',
+                _ => 'Road',
+              },
+              pin.label,
+              '${pin.status} · ${pin.intensity}%',
+            ),
+        ],
+      );
+    }
+    if (selected == 'Q') return const SizedBox.shrink();
+    if (apiLoading && publishedUpdate == null) {
+      return _Status(
+        'Loading live LGU update…',
+        context.nimbusPalette.muted,
+        spinner: true,
+      );
+    }
+    final error = apiError;
+    if (error != null) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: context.nimbusPalette.surfaceAlt,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Live LGU update unavailable: $error',
+                style: const TextStyle(color: NimbusColors.danger),
+              ),
+            ),
+            IconButton(
+              onPressed: onRefreshApi,
+              tooltip: 'Retry',
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final update = publishedUpdate;
+    if (update == null) {
+      return _Empty(
+        selected == 'O'
+            ? 'No current LGU report'
+            : 'No ${_selectedLabel} report',
+        'No status has been published for ${location.name}.',
+      );
+    }
+    final when = TimeOfDay.fromDateTime(
+      update.updatedAt.toLocal(),
+    ).format(context);
+    final out = <Widget>[
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Latest LGU report',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+              ),
+            ),
+            Text(when, style: TextStyle(color: context.nimbusPalette.muted)),
+            IconButton(
+              onPressed: onRefreshApi,
+              tooltip: 'Refresh town status',
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+      ),
+    ];
+    if (selected == 'O' || selected == 'C') {
+      out.add(
+        _Row(
+          Icons.school_outlined,
+          update.classes == 0 ? NimbusColors.ok : NimbusColors.warning,
+          'Class status',
+          update.classes == 0 ? 'No suspension' : 'Classes suspended',
+          _classes[update.classes.clamp(0, 5)],
+        ),
+      );
+    }
+    if (selected == 'O' || selected == 'F') {
+      for (final area in update.floodAreas) {
+        final color =
+            area.status == 'F'
+                ? NimbusColors.danger
+                : area.status == 'W'
+                ? NimbusColors.warning
+                : NimbusColors.ok;
+        out.add(
+          _Row(
+            Icons.waves,
+            color,
+            '${_level[area.level] ?? 'Flood status'} · ${_now[area.status] ?? ''}',
+            area.name,
+            '',
+          ),
+        );
+      }
+    }
+    if (selected == 'O' || selected == 'E') {
+      for (final center in update.evacuationCenters) {
+        final color =
+            center.status == 'F' || center.status == 'X'
+                ? NimbusColors.danger
+                : center.percentFull >= 85
+                ? NimbusColors.warning
+                : NimbusColors.ok;
+        final status = switch (center.status) {
+          'F' => 'Full',
+          'X' => 'Closed',
+          _ => 'Open',
+        };
+        out.add(
+          _Row(
+            Icons.home_outlined,
+            color,
+            'Evacuation center · $status',
+            center.name,
+            '${center.percentFull}% full',
+          ),
+        );
+      }
+    }
+    if ((selected == 'O') && update.notice.isNotEmpty) {
+      out.add(
+        _Row(
+          Icons.campaign_outlined,
+          NimbusColors.primary,
+          'LGU advisory',
+          update.notice,
+          'From ${location.name} LGU',
+        ),
+      );
+    }
+    if (selected == 'O' || selected == 'R') {
+      for (final road in update.roadStatuses) {
+        final status = _road[road.status] ?? ('Unknown', '');
+        final color =
+            {'X': NimbusColors.danger, 'L': NimbusColors.warning}[road
+                .status] ??
+            NimbusColors.ok;
+        out.add(
+          _Row(
+            Icons.add_road,
+            color,
+            'Road status · ${status.$1}',
+            road.name,
+            status.$2,
+          ),
+        );
+      }
+    }
+    if (selected != 'O' && out.length == 1) {
+      return _Empty(
+        'No ${_selectedLabel} status',
+        'No ${_selectedLabel.toLowerCase()} status has been included in the latest LGU report.',
+      );
+    }
+    out.add(const SizedBox(height: 4));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: out,
+    );
+  }
+
+  String get _selectedLabel => switch (selected) {
+    'F' => 'Flood',
+    'E' => 'Evacuation',
+    'C' => 'Class',
+    'R' => 'Road',
+    _ => 'LGU',
+  };
+
+  PhilippineLocation? _findLocation(String code) {
+    for (final candidate in locations) {
+      if (candidate.code == code || candidate.smsCode == code) return candidate;
+    }
+    return null;
+  }
+
+  String _locationName(String code) =>
+      _findLocation(code)?.name ??
+      townByCodeOrNull(code)?.name ??
+      'Unknown location ($code)';
+
+  Town _townForReply(String code) {
+    final match = _findLocation(code);
+    if (match != null) return townForLocation(match);
+    return townByCodeOrNull(code) ?? townForLocation(location);
+  }
+
+  List<Widget> _content(BuildContext context) {
     if (showSaved) {
-      if (saved.isEmpty) return [const _Empty('No saved updates yet', 'Every reply you get is saved here automatically.')];
+      if (saved.isEmpty) {
+        return [
+          const _Empty(
+            'No saved updates yet',
+            'Every reply you get is saved here automatically.',
+          ),
+        ];
+      }
       return [
         for (final u in saved)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: ListTile(
               minTileHeight: 64,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: NimbusColors.line)),
-              title: Text('${_tabs.firstWhere((t) => t.$1 == u.type).$4} · ${townByCode(u.townCode).name}', style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('Received ${TimeOfDay.fromDateTime(u.received).hour}:${u.received.minute.toString().padLeft(2, '0')}'),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: context.nimbusPalette.line),
+              ),
+              title: Text(
+                '${_tabs.firstWhere((t) => t.$1 == u.type).$4} · ${_locationName(u.townCode)}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(
+                'Received ${TimeOfDay.fromDateTime(u.received).hour}:${u.received.minute.toString().padLeft(2, '0')}',
+              ),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => onOpenSaved(u),
             ),
@@ -329,73 +1141,248 @@ class _Sheet extends StatelessWidget {
       ];
     }
     final out = <Widget>[];
-    if (waiting) out.add(const _Status('Waiting for reply by SMS…', NimbusColors.muted, spinner: true));
+    if ((selected == 'O' || selected == 'Q' || selected == 'C') &&
+        (weatherFallback != null ||
+            weatherFallbackLoading ||
+            weatherFallbackError != null)) {
+      out.add(
+        _WeatherFallback(
+          snapshot: weatherFallback,
+          loading: weatherFallbackLoading,
+          error: weatherFallbackError,
+        ),
+      );
+    }
+    if (waiting) {
+      out.add(
+        _Status(
+          'Waiting for reply by SMS…',
+          context.nimbusPalette.muted,
+          spinner: true,
+        ),
+      );
+    }
     final r = reply;
     if (r == null) {
-      if (!waiting) out.add(_Empty('Not requested yet', 'Tap “$cta”. The reply is saved here so you can open it again offline.'));
+      if (!waiting) {
+        out.add(
+          _Empty(
+            weatherFallback == null
+                ? 'Not requested yet'
+                : 'No fresh storm SMS reply',
+            weatherFallback == null
+                ? 'Tap “$cta”. The reply is saved here so you can open it again offline.'
+                : 'Open-Meteo is general local weather, not an official storm warning.',
+          ),
+        );
+      }
       return out;
     }
-    final t = townByCode(r.townCode);
+    final t = _townForReply(r.townCode);
     final issued = 'Issued ${r.time.substring(0, 2)}:${r.time.substring(2)}';
+    if (selected == 'C' && r.type == 'Q') {
+      final classes = r.storm!.classes;
+      out
+        ..add(
+          _Row(
+            Icons.school_outlined,
+            classes == 0 ? NimbusColors.ok : NimbusColors.warning,
+            'Class status',
+            classes == 0 ? 'No suspension' : 'Classes suspended',
+            _classes[classes.clamp(0, 5)],
+          ),
+        )
+        ..add(
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              r.valid
+                  ? '✓ Signature checked'
+                  : '✕ Signature failed, don’t trust this reply',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: r.valid ? NimbusColors.ok : NimbusColors.danger,
+              ),
+            ),
+          ),
+        );
+      return out;
+    }
     switch (r.type) {
       case 'Q':
         final s = r.storm!;
         final w = t.warnings[s.warning] ?? ('Storm update', '');
         out
-          ..add(_Row(Icons.warning_amber, NimbusColors.danger, 'Official warning (sample)', w.$1, '${w.$2} · $issued'))
-          ..add(const _Row(Icons.air, NimbusColors.primary, 'Storm movement (sample)', 'Moving west-northwest, about 20 km/h', 'Dots show where the storm has been'))
-          ..add(_Row(Icons.cloud_outlined, NimbusColors.primary, 'Forecast', '${_rain[s.rain.clamp(0, 4)]}, gusts ${s.gusts} km/h', 'General forecast for ${t.name}'));
-        if (s.evacSite > 0 && s.evacSite <= t.sites.length) {
+          ..add(
+            _Row(
+              Icons.warning_amber,
+              NimbusColors.danger,
+              'Official warning (sample)',
+              w.$1,
+              '${w.$2} · $issued',
+            ),
+          )
+          ..add(
+            const _Row(
+              Icons.air,
+              NimbusColors.primary,
+              'Storm movement (sample)',
+              'Moving west-northwest, about 20 km/h',
+              'Dots show where the storm has been',
+            ),
+          )
+          ..add(
+            _Row(
+              Icons.cloud_outlined,
+              NimbusColors.primary,
+              'Forecast',
+              '${_rain[s.rain.clamp(0, 4)]}, gusts ${s.gusts} km/h',
+              'General forecast for ${t.name}',
+            ),
+          );
+        if (selected == 'O' && s.evacSite > 0 && s.evacSite <= t.sites.length) {
           final site = t.sites[s.evacSite - 1];
-          out.add(s.evacStatus == 'O'
-              ? _Row(Icons.home_outlined, NimbusColors.ok, 'LGU announcement', 'Evacuate to $site', 'Site open')
-              : _Row(Icons.home_outlined, NimbusColors.danger, 'LGU announcement', '$site is ${s.evacStatus == 'F' ? 'full' : 'closed'}', 'Open Evac to find a site with room'));
+          out.add(
+            s.evacStatus == 'O'
+                ? _Row(
+                  Icons.home_outlined,
+                  NimbusColors.ok,
+                  'LGU announcement',
+                  'Evacuate to $site',
+                  'Site open',
+                )
+                : _Row(
+                  Icons.home_outlined,
+                  NimbusColors.danger,
+                  'LGU announcement',
+                  '$site is ${s.evacStatus == 'F' ? 'full' : 'closed'}',
+                  'Open Evac to find a site with room',
+                ),
+          );
         }
-        if (s.classes > 0) out.add(_Row(Icons.school_outlined, NimbusColors.warning, 'LGU announcement', 'Classes suspended', _classes[s.classes.clamp(0, 5)]));
-        if (r.notice.isNotEmpty) out.add(_Row(Icons.campaign_outlined, NimbusColors.primary, 'LGU notice', r.notice, 'From ${t.name} LGU'));
+        if (selected == 'O' && s.classes > 0) {
+          out.add(
+            _Row(
+              Icons.school_outlined,
+              NimbusColors.warning,
+              'LGU announcement',
+              'Classes suspended',
+              _classes[s.classes.clamp(0, 5)],
+            ),
+          );
+        }
+        if (selected == 'O' && r.notice.isNotEmpty) {
+          out.add(
+            _Row(
+              Icons.campaign_outlined,
+              NimbusColors.primary,
+              'LGU notice',
+              r.notice,
+              'From ${t.name} LGU',
+            ),
+          );
+        }
       case 'F':
         for (final i in r.items) {
-          final name = i.customName ?? (i.index <= t.floodAreas.length ? t.floodAreas[i.index - 1] : 'Area ${i.index}');
-          final color = {'H': NimbusColors.danger, 'M': NimbusColors.warning}[i.level] ?? NimbusColors.ok;
-          out.add(_Row(null, color, _level[i.level] ?? '', name, _now[i.now] ?? '', number: i.index));
+          final name =
+              i.customName ??
+              (i.index <= t.floodAreas.length
+                  ? t.floodAreas[i.index - 1]
+                  : 'Area ${i.index}');
+          final color =
+              {'H': NimbusColors.danger, 'M': NimbusColors.warning}[i.level] ??
+              NimbusColors.ok;
+          out.add(
+            _Row(
+              null,
+              color,
+              _level[i.level] ?? '',
+              name,
+              _now[i.now] ?? '',
+              number: i.index,
+            ),
+          );
         }
       case 'E':
         for (final i in r.items) {
-          final name = i.index <= t.sites.length ? t.sites[i.index - 1] : 'Site ${i.index}';
+          final name =
+              i.index <= t.sites.length
+                  ? t.sites[i.index - 1]
+                  : 'Site ${i.index}';
           final pct = i.percentFull ?? 0;
           out.add(switch (i.status) {
-            'F' => _Row(null, NimbusColors.danger, 'Full', name, 'No room left, go to another site', number: i.index, percent: 100),
-            'X' => _Row(null, NimbusColors.muted, 'Closed', name, 'Not taking evacuees', number: i.index),
-            _ => _Row(null, pct >= 85 ? NimbusColors.warning : NimbusColors.ok, pct >= 85 ? 'Almost full' : 'Open', name, '$pct% full', number: i.index, percent: pct),
+            'F' => _Row(
+              null,
+              NimbusColors.danger,
+              'Full',
+              name,
+              'No room left, go to another site',
+              number: i.index,
+              percent: 100,
+            ),
+            'X' => _Row(
+              null,
+              context.nimbusPalette.muted,
+              'Closed',
+              name,
+              'Not taking evacuees',
+              number: i.index,
+            ),
+            _ => _Row(
+              null,
+              pct >= 85 ? NimbusColors.warning : NimbusColors.ok,
+              pct >= 85 ? 'Almost full' : 'Open',
+              name,
+              '$pct% full',
+              number: i.index,
+              percent: pct,
+            ),
           });
         }
       case 'R':
         for (final i in r.items) {
-          final name = i.customName ?? (i.index <= t.roads.length ? t.roads[i.index - 1] : 'Road ${i.index}');
+          final name =
+              i.customName ??
+              (i.index <= t.roads.length
+                  ? t.roads[i.index - 1]
+                  : 'Road ${i.index}');
           final s = _road[i.status] ?? ('', '');
-          final color = {'X': NimbusColors.danger, 'L': NimbusColors.warning}[i.status] ?? NimbusColors.ok;
+          final color =
+              {'X': NimbusColors.danger, 'L': NimbusColors.warning}[i.status] ??
+              NimbusColors.ok;
           out.add(_Row(null, color, s.$1, name, s.$2, number: i.index));
         }
     }
-    out.add(Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Text(r.valid ? '✓ Signature checked' : '✕ Signature failed, don’t trust this reply',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: r.valid ? NimbusColors.ok : NimbusColors.danger)),
-    ));
-    if (showRaw && latest != null) {
-      out.add(Container(
-        margin: const EdgeInsets.only(top: 8),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: NimbusColors.surfaceAlt, borderRadius: BorderRadius.circular(12)),
-        child: SelectableText(latest!.sms, style: const TextStyle(fontFamily: 'monospace', color: NimbusColors.primary)),
-      ));
-    }
+    out.add(
+      Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          r.valid
+              ? '✓ Signature checked'
+              : '✕ Signature failed, don’t trust this reply',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: r.valid ? NimbusColors.ok : NimbusColors.danger,
+          ),
+        ),
+      ),
+    );
     return out;
   }
 }
 
 class _Row extends StatelessWidget {
-  const _Row(this.icon, this.color, this.tag, this.big, this.sub, {this.number, this.percent});
+  const _Row(
+    this.icon,
+    this.color,
+    this.tag,
+    this.big,
+    this.sub, {
+    this.number,
+    this.percent,
+  });
   final IconData? icon;
   final Color color;
   final String tag;
@@ -406,37 +1393,157 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: NimbusColors.surfaceAlt, borderRadius: BorderRadius.circular(16)),
-        child: Row(children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(14)),
-            alignment: Alignment.center,
-            child: icon != null
-                ? Icon(icon, color: NimbusColors.onPrimary)
-                : Text('$number', style: const TextStyle(color: NimbusColors.onPrimary, fontWeight: FontWeight.w800, fontSize: 16)),
+    margin: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: context.nimbusPalette.surfaceAlt,
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(14),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(tag.toUpperCase(), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6, color: NimbusColors.muted)),
-              Text(big, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-              Text(sub, style: const TextStyle(fontSize: 13.5, color: NimbusColors.muted)),
+          alignment: Alignment.center,
+          child:
+              icon != null
+                  ? Icon(icon, color: NimbusColors.onPrimary)
+                  : Text(
+                    '$number',
+                    style: const TextStyle(
+                      color: NimbusColors.onPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                    ),
+                  ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                tag.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                  color: context.nimbusPalette.muted,
+                ),
+              ),
+              Text(
+                big,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                sub,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: context.nimbusPalette.muted,
+                ),
+              ),
               if (percent != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(9),
-                    child: LinearProgressIndicator(value: percent! / 100, minHeight: 6, color: color, backgroundColor: NimbusColors.surface),
+                    child: LinearProgressIndicator(
+                      value: percent! / 100,
+                      minHeight: 6,
+                      color: color,
+                      backgroundColor: context.nimbusPalette.surface,
+                    ),
                   ),
                 ),
-            ]),
+            ],
           ),
-        ]),
-      );
+        ),
+      ],
+    ),
+  );
+}
+
+class _WeatherFallback extends StatelessWidget {
+  const _WeatherFallback({
+    required this.snapshot,
+    required this.loading,
+    required this.error,
+  });
+
+  final WeatherSnapshot? snapshot;
+  final bool loading;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final weather = snapshot;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      color: context.nimbusPalette.surfaceAlt,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Current local weather · Open-Meteo',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            const Text('General weather only — not an official storm warning.'),
+            if (loading) ...[
+              const SizedBox(height: 10),
+              const LinearProgressIndicator(),
+              const SizedBox(height: 6),
+              const Text('Checking current conditions…'),
+            ] else if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Weather fallback unavailable: $error',
+                style: const TextStyle(color: NimbusColors.danger),
+              ),
+            ] else if (weather != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.cloud_outlined, color: NimbusColors.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${weather.description} · '
+                      '${weather.temperatureC.round()}°C',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Feels like ${weather.apparentTemperatureC.round()}°C · '
+                'Wind ${weather.windKph.round()} km/h · '
+                'Gusts ${weather.gustKph.round()} km/h',
+              ),
+              Text(
+                'Rain ${weather.precipitationMm.toStringAsFixed(1)} mm · '
+                'Humidity ${weather.humidityPercent}%',
+              ),
+              Text(
+                'Observed ${TimeOfDay.fromDateTime(weather.observedAt.toLocal()).format(context)}',
+                style: TextStyle(color: context.nimbusPalette.muted),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _Status extends StatelessWidget {
@@ -447,15 +1554,29 @@ class _Status extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(color: NimbusColors.surfaceAlt, borderRadius: BorderRadius.circular(12)),
-        child: Row(children: [
-          if (spinner) const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-          if (spinner) const SizedBox(width: 10),
-          Expanded(child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w600))),
-        ]),
-      );
+    margin: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: context.nimbusPalette.surfaceAlt,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      children: [
+        if (spinner)
+          const SizedBox.square(
+            dimension: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        if (spinner) const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _Empty extends StatelessWidget {
@@ -465,12 +1586,24 @@ class _Empty extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(border: Border.all(color: NimbusColors.line, width: 1.5), borderRadius: BorderRadius.circular(16)),
-        child: Column(children: [
-          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          Text(body, textAlign: TextAlign.center, style: const TextStyle(color: NimbusColors.muted)),
-        ]),
-      );
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      border: Border.all(color: context.nimbusPalette.line, width: 1.5),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Column(
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          body,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: context.nimbusPalette.muted),
+        ),
+      ],
+    ),
+  );
 }

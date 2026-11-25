@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace "com.shounakmulay.telephony"
+    compileSdk 36
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+    defaultConfig {
+        minSdkVersion 23
+    }
+    lint {
+        disable 'InvalidPackage'
+    }
+
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.7.1'
+}

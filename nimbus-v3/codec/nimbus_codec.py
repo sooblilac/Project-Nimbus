@@ -1,6 +1,7 @@
 """Nimbus SMS format NB1 for the Python backend. Mirrors nimbus-codec.js line for line.
 
     NB1 <type> <town> <field> ... T<hhmm> [/<notice>] K<signature>
+    NB1~P~<town>~<pin>...~T<hhmm>~K<signature> for multipart-safe pin snapshots
 
 The K signature is a demo checksum. A real gateway signs with HMAC-SHA256.
 Run `python3 nimbus_codec.py` to check against test_vectors.json.
@@ -40,6 +41,47 @@ def encode(type_: str, town_code: str, fields: list[str], time: str, notice: str
 
 
 @dataclass
+class MapPin:
+    category: str
+    label: str
+    latitude: float
+    longitude: float
+    status: str
+    intensity: int
+
+
+def encode_pins(town_code: str, pins: list[MapPin], time: str) -> str:
+    category_codes = {"flood": "F", "evacuation": "E", "road": "R"}
+    status_codes = {"F": {"F", "W", "C"}, "E": {"O", "F", "X"}, "R": {"O", "L", "X"}}
+    fields = []
+    for pin in pins:
+        category = category_codes.get(pin.category)
+        if (
+            category is None
+            or pin.status not in status_codes[category]
+            or not 0 <= pin.intensity <= 100
+            or not -90 <= pin.latitude <= 90
+            or not -180 <= pin.longitude <= 180
+        ):
+            raise ValueError(f"Invalid map pin: {pin.label}")
+        label = re.sub(r"\s+", "_", clean_notice(pin.label).replace("|", " "))
+        if not label:
+            raise ValueError("Map pin labels cannot be empty")
+
+        def coord(value: float) -> int:
+            scaled = abs(value) * 100000
+            rounded = int(scaled + 0.5)
+            return -rounded if value < 0 else rounded
+
+        fields.append(
+            f"{category}|{pin.status}|{pin.intensity}|"
+            f"{coord(pin.latitude)}|{coord(pin.longitude)}|{label}"
+        )
+    body = "~".join([VERSION, "P", town_code, *fields, "T" + time])
+    return body + "~K" + signature(body)
+
+
+@dataclass
 class Storm:
     warning: str
     rain: int
@@ -69,11 +111,13 @@ class Reply:
     valid: bool
     storm: Optional[Storm] = None
     items: list[Item] = field(default_factory=list)
+    pins: list[MapPin] = field(default_factory=list)
 
 
 _FLOOD = re.compile(r"^A(\d+)([HML])([FWC])(?::(\S+))?$")
 _EVAC = re.compile(r"^S(\d+)([OFX])(\d+)$")
 _ROAD = re.compile(r"^R(\d+)([OLX])(?::(\S+))?$")
+_PIN = re.compile(r"^([FER])\|([A-Z])\|(\d{1,3})\|(-?\d{1,8})\|(-?\d{1,9})\|([A-Za-z0-9_.'-]+)$")
 
 
 def _parse_field(type_: str, part: str) -> Optional[Item]:
@@ -86,26 +130,63 @@ def _parse_field(type_: str, part: str) -> Optional[Item]:
     return None
 
 
+def _parse_pin(part: str) -> Optional[MapPin]:
+    match = _PIN.fullmatch(part)
+    if not match:
+        return None
+    category_code, status = match[1], match[2]
+    intensity, latitude, longitude = int(match[3]), int(match[4]), int(match[5])
+    valid_status = {
+        "F": {"F", "W", "C"},
+        "E": {"O", "F", "X"},
+        "R": {"O", "L", "X"},
+    }[category_code]
+    if (
+        status not in valid_status
+        or intensity > 100
+        or abs(latitude) > 9000000
+        or abs(longitude) > 18000000
+    ):
+        return None
+    category = {"F": "flood", "E": "evacuation", "R": "road"}[category_code]
+    return MapPin(
+        category,
+        match[6].replace("_", " "),
+        latitude / 100000,
+        longitude / 100000,
+        status,
+        intensity,
+    )
+
+
 def decode(sms: str) -> Optional[Reply]:
     """Returns None for anything that isn't an NB1 reply."""
-    k = sms.rfind(" K")
-    if k < 0 or not sms.startswith(VERSION + " "):
+    compact_pins = sms.startswith(VERSION + "~P~")
+    marker = "~K" if compact_pins else " K"
+    k = sms.rfind(marker)
+    if k < 0 or not sms.startswith(VERSION + ("~" if compact_pins else " ")):
         return None
     body = sms[:k]
     n = body.find(" /")
-    parts = (body[:n] if n >= 0 else body).split(" ")
+    parts = (body[:n] if n >= 0 else body).split("~" if compact_pins else " ")
     if len(parts) < 4:
         return None
     type_, items, time_part = parts[1], parts[3:-1], parts[-1]
     if not re.fullmatch(r"T\d{4}", time_part):
         return None
     reply = Reply(parts[0], type_, parts[2], time_part[1:], body[n + 2:] if n >= 0 else "",
-                  signature(body) == sms[k + 2:])
+                  signature(body) == sms[k + len(marker):])
     if type_ == "Q":
         f = {p[0]: p[1:] for p in items}
         e = re.match(r"^(\d+)([OFX]?)$", f.get("E", "0"))
         reply.storm = Storm(f.get("W", ""), int(f.get("R", 0)), int(f.get("G", 0)),
                             int(e[1]) if e else 0, e[2] if e else "", int(f.get("C", 0)))
+    elif type_ == "P":
+        for part in items:
+            pin = _parse_pin(part)
+            if pin is None:
+                return None
+            reply.pins.append(pin)
     else:
         for part in items:
             item = _parse_field(type_, part)
@@ -124,9 +205,14 @@ if __name__ == "__main__":
         if "tampered" in v:
             assert decode(v["tampered"]).valid is False
             continue
-        sms = encode(v["type"], v["town"], v["fields"], v["time"], v["notice"])
+        if v["type"] == "P":
+            pins = [MapPin(**pin) for pin in v["pins"]]
+            sms = encode_pins(v["town"], pins, v["time"])
+        else:
+            sms = encode(v["type"], v["town"], v["fields"], v["time"], v["notice"])
         assert sms == v["sms"], (sms, v["sms"])
         reply = decode(sms)
         assert reply.valid and reply.type == v["type"] and reply.notice == v["notice"]
         assert len(reply.items) == len(v["decoded"]["items"])
+        assert len(reply.pins) == len(v["decoded"].get("pins", []))
     print(f"{len(vectors)} vectors passed")
