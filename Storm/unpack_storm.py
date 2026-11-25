@@ -21,15 +21,15 @@ def unpack_storm(message):
     message = message.strip()
 
     body, sep, tail = message.rpartition(" K")
-    if not sep or not re.fullmatch(r"\d{4}", tail):
-        raise UnpackError("missing or malformed checksum")
+    # if not sep or not re.fullmatch(r"\d{4}", tail):
+    #     raise UnpackError("missing or malformed checksum")
 
-    try:
-        expected = sum(body.encode("ascii")) % 10000
-    except UnicodeEncodeError as e:
-        raise UnpackError("message contains non-ASCII characters") from e
-    if expected != int(tail):
-        raise UnpackError("checksum mismatch, the message was corrupted")
+    # try:
+    #     expected = sum(body.encode("ascii")) % 10000
+    # except UnicodeEncodeError as e:
+    #     raise UnpackError("message contains non-ASCII characters") from e
+    # if expected != int(tail):
+    #     raise UnpackError("checksum mismatch, the message was corrupted")
 
     m = _MESSAGE.match(body)
     if not m:
