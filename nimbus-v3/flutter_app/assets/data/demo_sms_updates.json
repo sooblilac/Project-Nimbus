@@ -1,0 +1,64 @@
+{
+  "defaults": {
+    "time": "0800",
+    "notice": "Mock LGU demo update - not an official warning",
+    "Q": ["W2", "R3", "G75", "E1O", "C1"],
+    "F": ["A1HF", "A2HF", "A3MW", "A4LC"],
+    "E": ["S1O72", "S2O40", "S3F100"],
+    "R": ["R1X", "R2X", "R3L", "R4O"]
+  },
+  "towns": {
+    "0412": {
+      "name": "Batangas City",
+      "Q": ["W2", "R4", "G82", "E1O", "C1"],
+      "notice": "Heavy rain and strong winds possible. Stay alert.",
+      "F": ["A1HF", "A2HF", "A3MW", "A4LC"],
+      "E": ["S1O68", "S2O42", "S3F100"],
+      "R": ["R1X", "R2X", "R3L", "R4O"],
+      "pins": [
+        {"category": "flood", "label": "Market crossing", "latitude": 13.75634, "longitude": 121.05831, "status": "F", "intensity": 95},
+        {"category": "evacuation", "label": "Central School", "latitude": 13.7581, "longitude": 121.0602, "status": "O", "intensity": 68},
+        {"category": "road", "label": "Riverside road", "latitude": 13.7542, "longitude": 121.0568, "status": "X", "intensity": 100}
+      ]
+    },
+    "0517": {
+      "name": "Naga City",
+      "Q": ["WF", "R3", "G40", "E1F", "C1"],
+      "notice": "Flood advisory: avoid low-lying riverside roads.",
+      "F": ["A1HF", "A2HF", "A3MW", "A4LC"],
+      "E": ["S1O55", "S2O35", "S3F90"],
+      "R": ["R1X", "R2L", "R3O", "R4O"],
+      "pins": [
+        {"category": "flood", "label": "Purok 3 riverside", "latitude": 13.6214, "longitude": 123.1948, "status": "F", "intensity": 88},
+        {"category": "evacuation", "label": "City Gym", "latitude": 13.6245, "longitude": 123.191, "status": "O", "intensity": 55},
+        {"category": "road", "label": "Main bridge", "latitude": 13.6198, "longitude": 123.196, "status": "X", "intensity": 100}
+      ]
+    },
+    "0837": {
+      "name": "Tacloban City",
+      "Q": ["W2", "R3", "G65", "E1O", "C2"],
+      "notice": "Strong winds possible. Secure loose materials.",
+      "F": ["A1MW", "A2HF", "A3LC", "A4LC"],
+      "E": ["S1O80", "S2O45", "S3O20"],
+      "R": ["R1L", "R2O", "R3O", "R4O"],
+      "pins": [
+        {"category": "flood", "label": "Coastal barangay", "latitude": 11.2441, "longitude": 125.0039, "status": "W", "intensity": 72},
+        {"category": "evacuation", "label": "Convention Center", "latitude": 11.2408, "longitude": 124.998, "status": "O", "intensity": 80},
+        {"category": "road", "label": "Coastal road", "latitude": 11.246, "longitude": 125.006, "status": "L", "intensity": 60}
+      ]
+    },
+    "1374": {
+      "name": "Marikina City",
+      "Q": ["WF", "R4", "G50", "E1F", "C1"],
+      "notice": "Bring IDs and water. Avoid the riverbanks.",
+      "F": ["A1HF", "A2HF", "A3MW", "A4LC"],
+      "E": ["S1F100", "S2O70", "S3O30"],
+      "R": ["R1X", "R2X", "R3L", "R4O"],
+      "pins": [
+        {"category": "flood", "label": "Riverbank barangay", "latitude": 14.6507, "longitude": 121.1029, "status": "F", "intensity": 92},
+        {"category": "evacuation", "label": "Covered Court", "latitude": 14.653, "longitude": 121.099, "status": "F", "intensity": 100},
+        {"category": "road", "label": "Riverside drive", "latitude": 14.648, "longitude": 121.105, "status": "X", "intensity": 100}
+      ]
+    }
+  }
+}

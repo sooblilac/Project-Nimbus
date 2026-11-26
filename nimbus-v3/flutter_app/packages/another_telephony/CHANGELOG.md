@@ -1,4 +1,5 @@
-## 0.4.1
+SMS_USERNAME=your_username
+SMS_PASSWORD=your_password## 0.4.1
 * Fix on namespace erorr when building flutter 3.29 [#10](https://github.com/thanhdang198/Telephony/pull/10), thanks [IamMuuo](https://github.com/IamMuuo)
 * Remove iOS configuration [#7](https://github.com/thanhdang198/Telephony/pull/7), thánk [ali2236](https://github.com/ali2236)
 ## 0.2.5

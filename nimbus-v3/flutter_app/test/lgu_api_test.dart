@@ -73,6 +73,18 @@ void main() {
     expect(restored.townCode, '0401005000');
   });
 
+  test('parses a no-storm PAGASA state', () {
+    final state = PagasaState.fromJson({
+      'active': false,
+      'message': 'No storm updates yet',
+      'updatedAt': '2026-11-26T15:34:09Z',
+    });
+
+    expect(state.active, isFalse);
+    expect(state.message, 'No storm updates yet');
+    expect(state.updatedAt, DateTime.parse('2026-11-26T15:34:09Z'));
+  });
+
   testWidgets('restores saved report entries and lets staff add a center', (
     tester,
   ) async {

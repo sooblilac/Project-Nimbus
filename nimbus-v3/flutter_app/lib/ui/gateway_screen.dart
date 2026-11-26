@@ -36,7 +36,7 @@ class GatewayScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                'Pin relay is active',
+                'NIMBUS SMS relay is active',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
@@ -44,9 +44,9 @@ class GatewayScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'This phone stores trusted LGU pin snapshots and replies to '
-                'resident “Get map pins” SMS requests. Keep its SIM active and '
-                'leave NIMBUS installed; do not force-stop the app.',
+                'This phone polls NIMBUS Cloudflare updates and replies to resident '
+                'SMS requests for LGU reports, PAGASA updates, and map pins. Keep its '
+                'SIM active and leave NIMBUS installed; do not force-stop the app.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: context.nimbusPalette.muted),
               ),

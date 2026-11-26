@@ -60,6 +60,9 @@ class _StormMapState extends State<StormMap> {
   String _activePackLabel = '';
   String? _offlineError;
   Timer? _styleLoadTimer;
+  MapPinUpdate? _selectedPin;
+  Offset? _selectedPinScreenPoint;
+  double _cameraZoom = 5.2;
 
   @override
   void initState() {
@@ -136,7 +139,59 @@ class _StormMapState extends State<StormMap> {
 
   void _onCircleTapped(ml.Circle circle) {
     final pin = _pinMarkers[circle];
-    if (pin != null) widget.onPinTapped?.call(pin);
+    if (pin != null) _showPinBubble(pin);
+  }
+
+  Future<void> _showPinBubble(MapPinUpdate pin) async {
+    widget.onPinTapped?.call(pin);
+    if (_cameraZoom < 11) {
+      if (mounted) setState(() {
+        _selectedPin = null;
+        _selectedPinScreenPoint = null;
+      });
+      return;
+    }
+    final controller = _controller;
+    if (controller == null) return;
+    try {
+      final point = await controller.toScreenLocation(
+        ml.LatLng(pin.latitude, pin.longitude),
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedPin = pin;
+        _selectedPinScreenPoint = Offset(point.x.toDouble(), point.y.toDouble());
+      });
+    } catch (_) {}
+  }
+
+  void _onCameraMove(ml.CameraPosition position) {
+    _cameraZoom = position.zoom;
+    if (_selectedPin != null) {
+      if (position.zoom < 11) {
+        if (mounted) setState(() {
+          _selectedPin = null;
+          _selectedPinScreenPoint = null;
+        });
+      } else {
+        unawaited(_refreshSelectedPinPosition());
+      }
+    }
+  }
+
+  Future<void> _refreshSelectedPinPosition() async {
+    final pin = _selectedPin;
+    final controller = _controller;
+    if (pin == null || controller == null) return;
+    try {
+      final point = await controller.toScreenLocation(
+        ml.LatLng(pin.latitude, pin.longitude),
+      );
+      if (!mounted || _selectedPin != pin) return;
+      setState(() {
+        _selectedPinScreenPoint = Offset(point.x.toDouble(), point.y.toDouble());
+      });
+    } catch (_) {}
   }
 
   void _onMapClick(ml.LatLng coordinates) {
@@ -647,6 +702,7 @@ class _StormMapState extends State<StormMap> {
             ),
             onMapCreated: _onMapCreated,
             onStyleLoadedCallback: _onStyleLoaded,
+            onCameraMove: _onCameraMove,
             onMapClick: (_, coordinates) => _onMapClick(coordinates),
             gestureRecognizers: {
               Factory<OneSequenceGestureRecognizer>(
@@ -780,6 +836,72 @@ class _StormMapState extends State<StormMap> {
             ),
           ),
         ),
+        if (_selectedPin != null && _selectedPinScreenPoint != null)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final point = _selectedPinScreenPoint!;
+              const bubbleWidth = 220.0;
+              final left = (point.dx - bubbleWidth / 2)
+                  .clamp(8.0, constraints.maxWidth - bubbleWidth - 8.0);
+              final top = (point.dy - 88)
+                  .clamp(8.0, constraints.maxHeight - 110.0);
+              final pin = _selectedPin!;
+              final status = switch (pin.status) {
+                'F' => pin.category == 'evacuation' ? 'Full' : 'Flooding now',
+                'W' => 'On watch',
+                'C' => 'No flooding now',
+                'O' => 'Open',
+                'L' => 'Light vehicles only',
+                'X' => 'Closed',
+                _ => 'Unknown status',
+              };
+              return Positioned(
+                left: left,
+                top: top,
+                width: bubbleWidth,
+                child: Material(
+                  elevation: 6,
+                  color: context.nimbusPalette.surface,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(14),
+                    topRight: Radius.circular(14),
+                    bottomLeft: Radius.circular(14),
+                    bottomRight: Radius.circular(4),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => setState(() {
+                      _selectedPin = null;
+                      _selectedPinScreenPoint = null;
+                    }),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            pin.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(status,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: context.nimbusPalette.muted,
+                              )),
+                          Text('${pin.intensity}% intensity',
+                              style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
       ],
     ),
   );

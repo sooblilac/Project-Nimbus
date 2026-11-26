@@ -51,22 +51,28 @@ class _NimbusAppState extends State<NimbusApp> {
   bool _opening = false;
   String? _openError;
 
+  final _navigatorKey = GlobalKey<NavigatorState>();
+
   Future<void> _setDarkMode(bool enabled) async {
     await widget.sms.setDarkMode(enabled);
     if (mounted) setState(() => _darkMode = enabled);
   }
 
-  Future<void> _openSettings() => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder:
-        (context) => SettingsPanel(
-          sms: widget.sms,
-          darkMode: _darkMode,
-          onDarkModeChanged: _setDarkMode,
-        ),
-  );
+  Future<void> _openSettings() {
+    final navigatorContext = _navigatorKey.currentContext;
+    if (navigatorContext == null) return Future<void>.value();
+    return showModalBottomSheet<void>(
+      context: navigatorContext,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder:
+          (context) => SettingsPanel(
+            sms: widget.sms,
+            darkMode: _darkMode,
+            onDarkModeChanged: _setDarkMode,
+          ),
+    );
+  }
 
   Future<void> _open(bool startAsLgu) async {
     setState(() {
@@ -153,6 +159,7 @@ class _NimbusAppState extends State<NimbusApp> {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: _navigatorKey,
     title: 'NIMBUS',
     debugShowCheckedModeBanner: false,
     theme: nimbusTheme(dark: _darkMode),

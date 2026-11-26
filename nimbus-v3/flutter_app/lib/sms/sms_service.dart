@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:another_telephony/telephony.dart';
 import 'package:flutter/widgets.dart';
@@ -11,6 +13,9 @@ const _defaultGatewayNumber = String.fromEnvironment(
   'NIMBUS_SMS_GATEWAY',
   defaultValue: '09263180296',
 );
+const _defaultApiUrl =
+    'https://nimbus-worker.gozocharlyz.workers.dev/api';
+const _cloudflareSyncInterval = Duration(seconds: 30);
 
 class SavedUpdate {
   const SavedUpdate(this.type, this.townCode, this.sms, this.received);
@@ -54,6 +59,7 @@ class SmsService implements PinSnapshotSender {
   final Database _db;
   final _telephony = Telephony.instance;
   Timer? _inboxSyncTimer;
+  Timer? _cloudflareSyncTimer;
 
   final _replies = StreamController<SavedUpdate>.broadcast();
 
@@ -89,11 +95,19 @@ class SmsService implements PinSnapshotSender {
     } else {
       _inboxSyncTimer?.cancel();
       _inboxSyncTimer = null;
+      await syncCloudflareUpdates();
+      _cloudflareSyncTimer?.cancel();
+      _cloudflareSyncTimer = Timer.periodic(
+        _cloudflareSyncInterval,
+        (_) => unawaited(syncCloudflareUpdates()),
+      );
     }
     return true;
   }
 
   Future<void> stopGateway() async {
+    _cloudflareSyncTimer?.cancel();
+    _cloudflareSyncTimer = null;
     _inboxSyncTimer?.cancel();
     _inboxSyncTimer = null;
     await _setBooleanSetting('smsGatewayMode', false);
@@ -151,6 +165,12 @@ class SmsService implements PinSnapshotSender {
 
   Future<void> setDarkMode(bool enabled) async {
     await _setBooleanSetting('darkMode', enabled);
+  }
+
+  Future<bool> getDemoMode() => _getBooleanSetting('demoMode');
+
+  Future<void> setDemoMode(bool enabled) async {
+    await _setBooleanSetting('demoMode', enabled);
   }
 
   Future<bool> _getBooleanSetting(String key) async {
@@ -218,6 +238,24 @@ class SmsService implements PinSnapshotSender {
     }
   }
 
+  Future<SavedUpdate?> latestTypeSnapshot(String type, String townCode) async {
+    final rows = await _db.query(
+      'saved_updates',
+      where: 'town = ? AND type = ?',
+      whereArgs: [townCode, type],
+      orderBy: 'received DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final r = rows.single;
+    return SavedUpdate(
+      r['type'] as String,
+      r['town'] as String,
+      r['sms'] as String,
+      DateTime.fromMillisecondsSinceEpoch(r['received'] as int),
+    );
+  }
+
   Future<codec.Reply?> latestPinSnapshot(String townCode) async {
     final rows = await _db.query(
       'saved_updates',
@@ -261,18 +299,33 @@ class SmsService implements PinSnapshotSender {
       return;
     }
 
-    final request = RegExp(r'^NB1 ASK P ((?:\d{4}|\d{10}))$').firstMatch(body);
+    final request = RegExp(r'^NB1 ASK ([QFERCP]) ((?:\d{4}|\d{10}))$').firstMatch(body);
     if (request == null || from.trim().isEmpty) return;
-    final townCode = request.group(1)!;
-    final snapshot = await latestPinSnapshot(townCode);
+    final type = request.group(1)!;
+    final townCode = request.group(2)!;
     final now = DateTime.now();
     final time =
         '${now.hour.toString().padLeft(2, '0')}'
         '${now.minute.toString().padLeft(2, '0')}';
-    final response =
-        snapshot == null
-            ? codec.encodePins(townCode, const [], time)
-            : bodyForSnapshot(townCode, snapshot);
+
+    String response;
+    if (type == 'P') {
+      final snapshot = await latestPinSnapshot(townCode);
+      response = snapshot == null
+          ? codec.encodePins(townCode, const [], time)
+          : bodyForSnapshot(townCode, snapshot);
+    } else if (type == 'Q') {
+      final snapshot = await latestTypeSnapshot('Q', '0000');
+      response = snapshot?.sms ??
+          codec.encode('Q', '0000', ['WNone', 'R0', 'G0', 'E0', 'C0'], time,
+              'No storm updates yet');
+    } else {
+      final snapshot = await latestTypeSnapshot(type, townCode);
+      response = snapshot?.sms ??
+          codec.encode(type, townCode, const [], time,
+              'No current $type update');
+    }
+
     await _telephony.sendSms(
       to: from,
       message: response,
@@ -341,6 +394,159 @@ class SmsService implements PinSnapshotSender {
 
   Future<int> clearTown(String townCode) =>
       _db.delete('saved_updates', where: 'town = ?', whereArgs: [townCode]);
+
+  /// Loads a prebuilt/mock NB1 reply into the same saved-update stream used
+  /// by real SMS, so hackathon demos and offline previews need no gateway.
+  Future<void> injectDemoReply(String sms) async {
+    final reply = codec.decode(sms);
+    if (reply == null || !reply.valid) {
+      throw const FormatException('The demo NB1 reply is invalid.');
+    }
+    await _saveReply(reply, sms, replaceDuplicate: true);
+  }
+
+  Future<void> syncCloudflareUpdates() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    try {
+      Future<Map<String, dynamic>> getJson(String path) async {
+        final request = await client.getUrl(Uri.parse('$_defaultApiUrl/$path'));
+        final response = await request.close().timeout(const Duration(seconds: 8));
+        final text = await utf8.decoder.bind(response).join().timeout(const Duration(seconds: 8));
+        final decoded = jsonDecode(text);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw StateError('Cloudflare API request failed (${response.statusCode}).');
+        }
+        if (decoded is! Map<String, dynamic>) throw const FormatException('Invalid Cloudflare API response.');
+        return decoded;
+      }
+
+      final townsResponse = await getJson('towns');
+      final towns = townsResponse['towns'];
+      if (towns is List) {
+        for (final town in towns) {
+          if (town is! Map<String, dynamic>) continue;
+          final townCode = town['townCode'];
+          final update = town['update'];
+          if (townCode is! String || update is! Map<String, dynamic>) continue;
+          await _saveLguSmsUpdates(townCode, update);
+        }
+      }
+
+      final pagasa = await getJson('pagasa');
+      await _savePagasaSmsUpdate(pagasa);
+    } catch (_) {
+      // Gateway stays usable offline and retries on the next polling interval.
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _saveLguSmsUpdates(String townCode, Map<String, dynamic> update) async {
+    final now = DateTime.now();
+    final time = '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+
+    final classes = update['classes'];
+    if (classes is int) {
+      await injectEncodedReply(codec.encode('C', townCode, ['C$classes'], time, _notice(update)), 'C', townCode);
+    }
+
+    final floodAreas = update['floodAreas'];
+    if (floodAreas is List) {
+      final fields = <String>[];
+      for (var i = 0; i < floodAreas.length; i++) {
+        final area = floodAreas[i];
+        if (area is! Map) continue;
+        final name = codec.cleanNotice(area['name']?.toString() ?? '')
+            .replaceAll(':', ' ').replaceAll(RegExp(r'\s+'), '_');
+        final level = area['level'];
+        final status = area['status'];
+        if (!{'H', 'M', 'L'}.contains(level) || !{'F', 'W', 'C'}.contains(status)) continue;
+        fields.add('A${i + 1}$level$status${name.isEmpty ? '' : ':$name'}');
+      }
+      await injectEncodedReply(codec.encode('F', townCode, fields, time, _notice(update)), 'F', townCode);
+    }
+
+    final evacAreas = update['evacuationCenters'];
+    if (evacAreas is List) {
+      final fields = <String>[];
+      for (var i = 0; i < evacAreas.length; i++) {
+        final center = evacAreas[i];
+        if (center is! Map) continue;
+        final status = center['status'];
+        final percent = center['percentFull'];
+        if (!{'O', 'F', 'X'}.contains(status) || percent is! int || percent < 0 || percent > 100) continue;
+        fields.add('S${i + 1}$status$percent');
+      }
+      await injectEncodedReply(codec.encode('E', townCode, fields, time, _notice(update)), 'E', townCode);
+    }
+
+    final roads = update['roadStatuses'];
+    if (roads is List) {
+      final fields = <String>[];
+      for (var i = 0; i < roads.length; i++) {
+        final road = roads[i];
+        if (road is! Map) continue;
+        final name = codec.cleanNotice((road['name']?.toString() ?? '')
+            .replaceAll(':', ' ')
+            .replaceAll(RegExp(r'\s+'), '_'));
+        final status = road['status'];
+        if (!{'O', 'L', 'X'}.contains(status)) continue;
+        fields.add('R${i + 1}$status${name.isEmpty ? '' : ':$name'}');
+      }
+      await injectEncodedReply(codec.encode('R', townCode, fields, time, _notice(update)), 'R', townCode);
+    }
+
+    final pins = update['mapPins'];
+    if (pins is List) {
+      final parsed = <codec.MapPin>[];
+      for (final pin in pins) {
+        if (pin is! Map) continue;
+        final latitude = pin['latitude'];
+        final longitude = pin['longitude'];
+        final intensity = pin['intensity'];
+        if (pin['category'] is! String || pin['label'] is! String ||
+            latitude is! num || longitude is! num || intensity is! int) continue;
+        parsed.add(codec.MapPin(
+          category: pin['category'] as String,
+          label: pin['label'] as String,
+          latitude: latitude.toDouble(),
+          longitude: longitude.toDouble(),
+          status: pin['status'] as String,
+          intensity: intensity,
+        ));
+      }
+      await injectEncodedReply(codec.encodePins(townCode, parsed, time), 'P', townCode);
+    }
+  }
+
+  String _notice(Map<String, dynamic> update) {
+    return codec.cleanNotice(update['notice']?.toString() ?? '');
+  }
+
+  Future<void> _savePagasaSmsUpdate(Map<String, dynamic> pagasa) async {
+    final now = DateTime.now();
+    final time = '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    final active = pagasa['active'] == true;
+    final warning = active
+        ? codec.cleanNotice(pagasa['message']?.toString() ?? 'PAGASA storm update')
+            .replaceAll(RegExp(r'\s+'), '_')
+        : 'None';
+    final rain = pagasa['rain'] is int ? pagasa['rain'] as int : 0;
+    final gusts = pagasa['gusts'] is int ? pagasa['gusts'] as int : 0;
+    final fields = ['W$warning', 'R$rain', 'G$gusts', 'E0', 'C0'];
+    final notice = active
+        ? codec.cleanNotice(pagasa['message']?.toString() ?? 'PAGASA storm update')
+        : 'No storm updates yet';
+    await injectEncodedReply(codec.encode('Q', '0000', fields, time, notice), 'Q', '0000');
+  }
+
+  Future<void> injectEncodedReply(String sms, String type, String townCode) async {
+    final reply = codec.decode(sms);
+    if (reply == null || !reply.valid) {
+      throw const FormatException('Could not encode the gateway reply.');
+    }
+    await _saveReply(reply, sms, replaceDuplicate: true);
+  }
 }
 
 @pragma('vm:entry-point')

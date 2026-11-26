@@ -250,6 +250,38 @@ class LguUpdate {
   };
 }
 
+class PagasaState {
+  const PagasaState({
+    required this.active,
+    required this.message,
+    required this.updatedAt,
+  });
+
+  final bool active;
+  final String message;
+  final DateTime? updatedAt;
+
+  factory PagasaState.fromJson(Map<String, dynamic> json) {
+    final active = json['active'];
+    final message = json['message'];
+    if (active is! bool || message is! String) {
+      throw const FormatException('The PAGASA API response is invalid.');
+    }
+
+    final rawUpdatedAt = json['updatedAt'];
+    DateTime? updatedAt;
+    if (rawUpdatedAt is String) {
+      updatedAt = DateTime.tryParse(rawUpdatedAt);
+    }
+
+    return PagasaState(
+      active: active,
+      message: message,
+      updatedAt: updatedAt,
+    );
+  }
+}
+
 class LguApiException implements Exception {
   const LguApiException(this.message);
 
@@ -280,7 +312,7 @@ class LguApiService {
           Uri.parse(
             const String.fromEnvironment(
               'NIMBUS_API_URL',
-              defaultValue: 'http://127.0.0.1:8080/api',
+              defaultValue: 'https://nimbus-worker.gozocharlyz.workers.dev/api',
             ),
           );
 
@@ -386,6 +418,11 @@ class LguApiService {
     }
 
     return update;
+  }
+
+  Future<PagasaState> fetchPagasa() async {
+    final response = await _send('GET', 'pagasa');
+    return PagasaState.fromJson(response);
   }
 
   _PublisherCredentials _loadPublisherCredentials() {

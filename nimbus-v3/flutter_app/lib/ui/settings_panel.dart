@@ -28,6 +28,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   final _apiUrlController = TextEditingController();
   final _secureStorage = const FlutterSecureStorage();
   late bool _darkMode = widget.darkMode;
+  bool _demoMode = false;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -50,6 +51,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
     try {
       final number = await widget.sms.getGatewayNumber();
       final trustedLguNumber = await widget.sms.getTrustedLguNumber();
+      final demoMode = await widget.sms.getDemoMode();
       final savedApiUrl = await _secureStorage.read(
         key: LguApiService.apiUrlStorageKey,
       );
@@ -60,7 +62,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
         _apiUrlController.text =
             savedApiUrl?.trim().isNotEmpty == true
                 ? savedApiUrl!.trim()
-                : 'http://127.0.0.1:8080/api';
+                : 'https://nimbus-worker.gozocharlyz.workers.dev/api';
+        _demoMode = demoMode;
         _loading = false;
       });
     } on DatabaseException catch (error) {
@@ -111,6 +114,30 @@ class _SettingsPanelState extends State<SettingsPanel> {
       setState(() {
         _saving = false;
         _error = 'Could not save the relay number: $error';
+      });
+    }
+  }
+
+  Future<void> _toggleDemoMode(bool enabled) async {
+    setState(() {
+      _demoMode = enabled;
+      _error = null;
+    });
+    try {
+      await widget.sms.setDemoMode(enabled);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled
+              ? 'Demo mode enabled. Restart NIMBUS to load Batangas City demo data.'
+              : 'Demo mode disabled.'),
+        ),
+      );
+    } on DatabaseException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _demoMode = !enabled;
+        _error = 'Could not save demo mode: $error';
       });
     }
   }
@@ -194,6 +221,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Demo mode'),
+            subtitle: const Text('Batangas City simulation: LGU updates, weather, PAGASA and map pins'),
+            secondary: const Icon(Icons.science_outlined),
+            value: _demoMode,
+            onChanged: _loading || _saving ? null : _toggleDemoMode,
+          ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Dark mode'),

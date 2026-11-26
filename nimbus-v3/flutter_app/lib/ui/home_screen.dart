@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../codec/nimbus_codec.dart' as codec;
@@ -132,6 +134,7 @@ class _HomeScreenState extends State<HomeScreen> {
   StreamSubscription<SavedUpdate>? _sub;
   Timer? _refreshTimer;
   bool _publishedUpdateLoaded = false;
+  bool _demoMode = false;
 
   @override
   void initState() {
@@ -388,9 +391,14 @@ class _HomeScreenState extends State<HomeScreen> {
     } on StateError catch (error) {
       if (!mounted) return;
       setState(() => _waiting = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message.toString())));
+      unawaited(_loadDemoReply(_smsType, requestLocation.smsCode));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${error.message}. Loaded mock demo data instead.',
+          ),
+        ),
+      );
     }
   }
 
@@ -524,6 +532,50 @@ class _HomeScreenState extends State<HomeScreen> {
     _refreshPublishedUpdate(_location.code);
   }
 
+  Future<void> _loadDemoReply(String type, String townCode) async {
+    final raw = await rootBundle.loadString('assets/data/demo_sms_updates.json');
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+    final defaults = data['defaults'] as Map<String, dynamic>;
+    final towns = data['towns'] as Map<String, dynamic>;
+    final town = towns[townCode] as Map<String, dynamic>?;
+    final now = DateTime.now();
+    final time =
+        '${now.hour.toString().padLeft(2, '0')}'
+        '${now.minute.toString().padLeft(2, '0')}';
+
+    String sms;
+    if (type == 'P') {
+      final pins = <codec.MapPin>[];
+      for (final item in (town?['pins'] as List<dynamic>? ?? const [])) {
+        final pin = item as Map<String, dynamic>;
+        pins.add(codec.MapPin(
+          category: pin['category'] as String,
+          label: pin['label'] as String,
+          latitude: (pin['latitude'] as num).toDouble(),
+          longitude: (pin['longitude'] as num).toDouble(),
+          status: pin['status'] as String,
+          intensity: pin['intensity'] as int,
+        ));
+      }
+      sms = codec.encodePins(townCode, pins, time);
+    } else {
+      final fields = <String>[];
+      if (town?[type] is List) {
+        fields.addAll((town![type] as List).cast<String>());
+      } else {
+        fields.addAll(
+          (defaults[type] as List<dynamic>? ?? const []).cast<String>(),
+        );
+      }
+      final notice = type == 'Q'
+          ? (town?['notice'] as String? ??
+              defaults['notice'] as String)
+          : '';
+      sms = codec.encode(type, townCode, fields, time, notice);
+    }
+    await widget.sms.injectDemoReply(sms);
+  }
+
   @override
   Widget build(BuildContext context) {
     final latest = _latest;
@@ -543,7 +595,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   _publishedUpdate?.floodAreas.any((a) => a.status == 'F') ??
                   false,
               mapPins: _mapPins,
-              onPinTapped: _showMapPin,
+              onPinTapped: null,
               attributionBottomInset:
                   MediaQuery.sizeOf(context).height *
                       (_panelExpanded ? 0.35 : 0.15) +
