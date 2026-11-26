@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from SMS import send_sms
-from Storm.unpack_storm import unpack_storm
+from Storm.pack_storm import temp_vowel_reply
 
 DATA_DIR = PROJECT_ROOT / "Data"
 
@@ -111,7 +111,7 @@ def handle_incoming_sms(payload, saved_path: Path | None = None) -> None:
         print(f"Duplicate/retry detected ({key[:12]}); skipped reply.", flush=True)
         return
 
-    reply = unpack_storm(msg_text)
+    reply = temp_vowel_reply(msg_text)
     print(f"Reply built: {reply!r}", flush=True)
 
     sent = send_sms(sender, reply)
