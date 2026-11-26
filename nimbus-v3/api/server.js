@@ -86,6 +86,21 @@ function validateUpdate(body) {
       (!Array.isArray(body.mapPins) || body.mapPins.length > 100)) {
     return "mapPins must contain at most 100 entries.";
   }
+  if (body.rain !== undefined && (!Number.isInteger(body.rain) || body.rain < 0 || body.rain > 4)) {
+    return "rain must be an integer from 0 to 4.";
+  }
+  if (body.gusts !== undefined && (!Number.isInteger(body.gusts) || body.gusts < 0 || body.gusts > 500)) {
+    return "gusts must be an integer from 0 to 500.";
+  }
+  if (body.pagasaActive !== undefined && typeof body.pagasaActive !== "boolean") {
+    return "pagasaActive must be a boolean.";
+  }
+  if (body.pagasaName !== undefined && typeof body.pagasaName !== "string") {
+    return "pagasaName must be a string.";
+  }
+  if (body.pagasaBulletin !== undefined && typeof body.pagasaBulletin !== "string") {
+    return "pagasaBulletin must be a string.";
+  }
   for (const area of body.floodAreas) {
     if (!area || typeof area !== "object" || Array.isArray(area) ||
         !validText(area.name, 60) || !FLOOD_LEVELS.has(area.level) || !FLOOD_STATUSES.has(area.status)) {
@@ -135,7 +150,13 @@ async function loadUpdates(file) {
 }
 
 function send(response, status, value) {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization",
+  });
   response.end(JSON.stringify(value));
 }
 
@@ -231,6 +252,28 @@ function createServer({
       const url = new URL(request.url, "http://localhost");
       if (request.method === "GET" && url.pathname === "/health") {
         return send(response, 200, { ok: true });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/towns") {
+        const towns = Object.entries(updates)
+          .filter(([, update]) => update && typeof update === "object")
+          .map(([townCode, update]) => ({
+            townCode,
+            classes: update.classes,
+            notice: update.notice || "",
+            updatedAt: update.updatedAt || null,
+          }))
+          .sort((a, b) => a.townCode.localeCompare(b.townCode));
+        return send(response, 200, { towns });
+      }
+
+      if (request.method === "OPTIONS") {
+        response.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+          "access-control-allow-headers": "Content-Type, Authorization",
+        });
+        return response.end();
       }
 
       if (request.method === "POST" && url.pathname === "/api/auth/login") {
@@ -336,6 +379,14 @@ function createServer({
           status: pin.status,
           intensity: pin.intensity,
         })),
+        ...(body.rain !== undefined ? { rain: body.rain } : {}),
+        ...(body.gusts !== undefined ? { gusts: body.gusts } : {}),
+        ...(typeof body.issuedAt === "string" && /^\d{2}:\d{2}$/.test(body.issuedAt)
+          ? { issuedAt: body.issuedAt }
+          : {}),
+        ...(body.pagasaActive !== undefined ? { pagasaActive: body.pagasaActive } : {}),
+        ...(typeof body.pagasaName === "string" ? { pagasaName: body.pagasaName } : {}),
+        ...(typeof body.pagasaBulletin === "string" ? { pagasaBulletin: body.pagasaBulletin } : {}),
         updatedAt: new Date().toISOString(),
       };
       await persistUpdate(townCode, update);

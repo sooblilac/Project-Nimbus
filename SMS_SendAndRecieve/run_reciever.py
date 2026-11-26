@@ -5,6 +5,7 @@ import re
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -89,7 +90,7 @@ def start_tunnel():
     """Start cloudflared and return (process, public_url)."""
     log = open(TUNNEL_LOG, "w", encoding="utf-8")
     proc = subprocess.Popen(
-        ["cloudflared", "tunnel", "--url", "http://localhost:5000"],
+        ["cloudflared", "tunnel", "--url", "http://localhost:5001"],
         stdout=log,
         stderr=subprocess.STDOUT,
     )
@@ -119,9 +120,30 @@ def register(url: str) -> None:
     if not (200 <= status < 300):
         print("[WARNING] Webhook did NOT register. Incoming replies will not be forwarded to /sms.")
 
+def pagasa_poll_loop():
+    interval = int(os.getenv("PAGASA_SYNC_INTERVAL_SECONDS", "900"))
+    project_root = HERE.parent
+    sync_script = project_root / "nimbus_sync.py"
+    while True:
+        try:
+            result = subprocess.run(
+                [sys.executable, str(sync_script)],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=240,
+            )
+            output = (result.stdout + result.stderr).strip()
+            print(output or f"PAGASA sync exit: {result.returncode}", flush=True)
+        except Exception as error:
+            print(f"PAGASA sync failed: {error}", flush=True)
+        time.sleep(interval)
+
 def main():
     receiver = subprocess.Popen([sys.executable, str(HERE / "reciever.py")])
     tunnel = None
+    poller = threading.Thread(target=pagasa_poll_loop, daemon=True)
+    poller.start()
     try:
         time.sleep(2)                        # let receiver start
         tunnel, url = start_tunnel()

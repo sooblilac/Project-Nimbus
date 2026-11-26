@@ -1,2 +1,9 @@
 __pycache__/
 .env
+# Nimbus runtime/generated files
+Data/.replied/
+Data/sms_replies/
+SMS_SendAndRecieve/tunnel.log
+nimbus-v3/flutter_app/android/.gradle/
+nimbus-v3/flutter_app/packages/another_telephony/android/.gradle/
+nimbus-v3/flutter_app/packages/another_telephony/android/gradle/wrapper/chat.json

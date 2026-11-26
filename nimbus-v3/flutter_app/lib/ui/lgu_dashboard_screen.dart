@@ -37,7 +37,7 @@ class LguDashboardScreen extends StatefulWidget {
 }
 
 class _LguDashboardScreenState extends State<LguDashboardScreen> {
-  final _api = LguApiService();
+  LguApiService _api = LguApiService();
   static const _savedLguLoginKey = 'saved_lgu_login';
   final _secureStorage = const FlutterSecureStorage();
   final _usernameController = TextEditingController();
@@ -72,6 +72,19 @@ class _LguDashboardScreenState extends State<LguDashboardScreen> {
 
   Future<void> _restoreLogin() async {
     try {
+      final savedApiUrl = await _secureStorage.read(
+        key: LguApiService.apiUrlStorageKey,
+      );
+      if (savedApiUrl != null && savedApiUrl.trim().isNotEmpty) {
+        final uri = Uri.tryParse(savedApiUrl.trim());
+        if (uri == null ||
+            !uri.hasScheme ||
+            (uri.scheme != 'https' && uri.scheme != 'http') ||
+            uri.host.isEmpty) {
+          throw const FormatException('The saved Nimbus API URL is invalid.');
+        }
+        _api = LguApiService(baseUri: uri);
+      }
       final saved = await _secureStorage.read(key: _savedLguLoginKey);
       if (saved == null) return;
       final decoded = jsonDecode(saved);
@@ -489,6 +502,16 @@ class _LguDashboardScreenState extends State<LguDashboardScreen> {
           const SizedBox(height: 8),
           Text(
             'This device remembers your login securely until you sign out.',
+            style: TextStyle(color: context.nimbusPalette.muted),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Nimbus API: ${_api.baseUri}',
+            style: TextStyle(color: context.nimbusPalette.muted),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Practical server guidance: Ensure the API URL is correct and the server is reachable.',
             style: TextStyle(color: context.nimbusPalette.muted),
           ),
         ],

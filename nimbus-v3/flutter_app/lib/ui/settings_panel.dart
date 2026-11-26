@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../lgu/lgu_api.dart';
 import '../sms/sms_service.dart';
 
 class SettingsPanel extends StatefulWidget {
@@ -23,6 +25,8 @@ class SettingsPanel extends StatefulWidget {
 class _SettingsPanelState extends State<SettingsPanel> {
   final _relayController = TextEditingController();
   final _trustedLguController = TextEditingController();
+  final _apiUrlController = TextEditingController();
+  final _secureStorage = const FlutterSecureStorage();
   late bool _darkMode = widget.darkMode;
   bool _loading = true;
   bool _saving = false;
@@ -38,6 +42,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
   void dispose() {
     _relayController.dispose();
     _trustedLguController.dispose();
+    _apiUrlController.dispose();
     super.dispose();
   }
 
@@ -45,10 +50,17 @@ class _SettingsPanelState extends State<SettingsPanel> {
     try {
       final number = await widget.sms.getGatewayNumber();
       final trustedLguNumber = await widget.sms.getTrustedLguNumber();
+      final savedApiUrl = await _secureStorage.read(
+        key: LguApiService.apiUrlStorageKey,
+      );
       if (!mounted) return;
       setState(() {
         _relayController.text = number;
         _trustedLguController.text = trustedLguNumber;
+        _apiUrlController.text =
+            savedApiUrl?.trim().isNotEmpty == true
+                ? savedApiUrl!.trim()
+                : 'http://127.0.0.1:8080/api';
         _loading = false;
       });
     } on DatabaseException catch (error) {
@@ -119,6 +131,49 @@ class _SettingsPanelState extends State<SettingsPanel> {
     }
   }
 
+  Future<void> _saveApiServerUrl() async {
+    final url = _apiUrlController.text.trim();
+    if (url.isEmpty) {
+      setState(() {
+        _error = 'API server URL cannot be empty.';
+      });
+      return;
+    }
+    final apiUrl = _apiUrlController.text.trim();
+    final apiUri = Uri.tryParse(apiUrl);
+    if (apiUri == null ||
+        !apiUri.hasScheme ||
+        (apiUri.scheme != 'https' && apiUri.scheme != 'http') ||
+        apiUri.host.isEmpty) {
+      setState(() {
+        _error = 'Enter a valid API URL, such as https://nimbus.example/api.';
+      });
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await _secureStorage.write(
+        key: LguApiService.apiUrlStorageKey,
+        value: url,
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('API server URL saved.')));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Could not save the API server URL: $error';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) => SafeArea(
     child: SingleChildScrollView(
@@ -178,6 +233,18 @@ class _SettingsPanelState extends State<SettingsPanel> {
               prefixIcon: Icon(Icons.verified_user_outlined),
             ),
           ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _apiUrlController,
+            enabled: !_loading && !_saving,
+            decoration: const InputDecoration(
+              labelText: 'API server URL',
+              hintText: 'https://api.example.com',
+              helperText:
+                  'Enter the URL of the API server for LGU login and resident API access.',
+              prefixIcon: Icon(Icons.api_outlined),
+            ),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -195,6 +262,17 @@ class _SettingsPanelState extends State<SettingsPanel> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                     : const Text('Save SMS settings'),
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: _loading || _saving ? null : _saveApiServerUrl,
+            child:
+                _loading || _saving
+                    ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                    : const Text('Save API server URL'),
           ),
         ],
       ),

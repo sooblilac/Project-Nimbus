@@ -133,3 +133,8 @@ use HTTPS for a deployed API.
 - Verify multipart SMS delivery with the target carriers and SIM devices before deployment.
 - The `K` signature is a demo checksum, not authentication. The gateway also checks the configured LGU sender number; use HMAC-SHA256 before any real pilot.
 - Open-Meteo weather is a general forecast/current-conditions fallback and is not an official warning.
+
+Bundled demo snapshots are available for Batangas City, Naga City, Tacloban City,
+Marikina City, and Purok 3 in `api/data/updates.json`. `GET /api/towns` lists their
+codes and summaries; `GET /api/towns/{townCode}/updates` returns the full snapshot.
+These entries are intentionally illustrative and should not be presented as official advisories.

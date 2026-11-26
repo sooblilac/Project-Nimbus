@@ -7,7 +7,10 @@ import 'package:sqflite/sqflite.dart';
 
 import '../codec/nimbus_codec.dart' as codec;
 
-const _defaultGatewayNumber = String.fromEnvironment('NIMBUS_SMS_GATEWAY');
+const _defaultGatewayNumber = String.fromEnvironment(
+  'NIMBUS_SMS_GATEWAY',
+  defaultValue: '09263180296',
+);
 
 class SavedUpdate {
   const SavedUpdate(this.type, this.townCode, this.sms, this.received);
@@ -50,6 +53,8 @@ class SmsService implements PinSnapshotSender {
 
   final Database _db;
   final _telephony = Telephony.instance;
+  Timer? _inboxSyncTimer;
+
   final _replies = StreamController<SavedUpdate>.broadcast();
 
   Stream<SavedUpdate> get replies => _replies.stream;
@@ -74,10 +79,25 @@ class SmsService implements PinSnapshotSender {
           (message) => _handle(message.address ?? '', message.body ?? ''),
       onBackgroundMessage: nimbusSmsBackgroundHandler,
     );
+    if (!gatewayMode) {
+      _inboxSyncTimer?.cancel();
+      await syncInboxReplies();
+      _inboxSyncTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => unawaited(syncInboxReplies()),
+      );
+    } else {
+      _inboxSyncTimer?.cancel();
+      _inboxSyncTimer = null;
+    }
     return true;
   }
 
-  Future<void> stopGateway() => _setBooleanSetting('smsGatewayMode', false);
+  Future<void> stopGateway() async {
+    _inboxSyncTimer?.cancel();
+    _inboxSyncTimer = null;
+    await _setBooleanSetting('smsGatewayMode', false);
+  }
 
   Future<bool> getGatewayMode() => _getBooleanSetting('smsGatewayMode');
 
@@ -185,6 +205,19 @@ class SmsService implements PinSnapshotSender {
     );
   }
 
+  Future<void> syncInboxReplies() async {
+    final gatewayNumber = (await getGatewayNumber()).trim();
+    if (gatewayNumber.isEmpty) return;
+    final messages = await _telephony.getInboxSms();
+    for (final message in messages.take(30)) {
+      final from = message.address ?? '';
+      if (!_samePhoneNumber(from, gatewayNumber)) continue;
+      final reply = codec.decode(message.body ?? '');
+      if (reply == null || !reply.valid) continue;
+      await _saveReply(reply, message.body ?? '', replaceDuplicate: true);
+    }
+  }
+
   Future<codec.Reply?> latestPinSnapshot(String townCode) async {
     final rows = await _db.query(
       'saved_updates',
@@ -252,7 +285,16 @@ class SmsService implements PinSnapshotSender {
     return codec.encodePins(townCode, snapshot.pins, time);
   }
 
-  Future<void> _saveReply(codec.Reply reply, String body) async {
+  Future<void> _saveReply(codec.Reply reply, String body,
+      {bool replaceDuplicate = false}) async {
+    final existing = await _db.query(
+      'saved_updates',
+      where: 'type = ? AND town = ? AND sms = ?',
+      whereArgs: [reply.type, reply.townCode, body],
+      limit: 1,
+    );
+    if (existing.isNotEmpty && replaceDuplicate) return;
+
     final update = SavedUpdate(
       reply.type,
       reply.townCode,

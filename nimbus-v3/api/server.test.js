@@ -34,6 +34,12 @@ after(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 
+test("the town announcement index is available to resident apps", async () => {
+  const response = await fetch(`${baseUrl}/api/towns`);
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray((await response.json()).towns));
+});
+
 test("residents can read the latest town update without authentication", async () => {
   const response = await fetch(`${baseUrl}/api/towns/0412/updates`);
   assert.equal(response.status, 200);

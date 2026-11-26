@@ -272,17 +272,20 @@ class LguSession {
 }
 
 class LguApiService {
+  static const apiUrlStorageKey = 'nimbus_api_url';
+
   LguApiService({Uri? baseUri})
     : _baseUri =
           baseUri ??
           Uri.parse(
             const String.fromEnvironment(
               'NIMBUS_API_URL',
-              defaultValue: 'http://10.0.2.2:8080/api',
+              defaultValue: 'http://127.0.0.1:8080/api',
             ),
           );
 
   final Uri _baseUri;
+  Uri get baseUri => _baseUri;
   static const _timeout = Duration(seconds: 12);
   late final _PublisherCredentials _publisherCredentials =
       _loadPublisherCredentials();

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../codec/nimbus_codec.dart' as codec;
 import '../data/philippine_location.dart';
@@ -106,7 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _tab = 'O';
   late PhilippineLocation _location;
   final _panelController = DraggableScrollableController();
-  final _lguApi = LguApiService();
+  LguApiService _lguApi = LguApiService();
   final _weatherService = OpenMeteoService();
   bool _waiting = false;
   bool _apiLoading = true;
@@ -126,8 +127,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _requestType;
   int _weatherRequestId = 0;
   Timer? _weatherFallbackTimer;
+  OverlayEntry? _pinBubble;
+  Timer? _pinBubbleTimer;
   StreamSubscription<SavedUpdate>? _sub;
   Timer? _refreshTimer;
+  bool _publishedUpdateLoaded = false;
 
   @override
   void initState() {
@@ -185,6 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
     widget.sms.saved().then((s) {
       if (mounted) setState(() => _saved = s);
     });
+    unawaited(_restoreApiUrl());
   }
 
   @override
@@ -194,6 +199,8 @@ class _HomeScreenState extends State<HomeScreen> {
       ..dispose();
     _refreshTimer?.cancel();
     _weatherFallbackTimer?.cancel();
+    _pinBubbleTimer?.cancel();
+    _pinBubble?.remove();
     _weatherRequestId++;
     _sub?.cancel();
     super.dispose();
@@ -211,6 +218,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _publishedUpdate = update;
         _apiLoading = false;
+        _publishedUpdateLoaded = true;
+        _smsPinSnapshotReceived = false;
+        _smsPins = [];
       });
     } on LguApiException catch (error) {
       if (!mounted || townCode != _location.code) return;
@@ -254,9 +264,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<MapPinUpdate> get _mapPins =>
-      _smsPinSnapshotReceived
+      _publishedUpdateLoaded
+          ? _publishedUpdate?.mapPins ?? const []
+          : _smsPinSnapshotReceived
           ? _smsPins
-          : _publishedUpdate?.mapPins ?? const [];
+          : const [];
 
   void _onLocationChanged(
     PhilippineLocation location, {
@@ -268,6 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _location = location;
       if (clearViewing) _viewing = null;
       _publishedUpdate = null;
+      _publishedUpdateLoaded = false;
       _apiError = null;
       _apiLoading = true;
       _waiting = false;
@@ -358,7 +371,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (!mounted ||
               !_waiting ||
               requestId != _weatherRequestId ||
-              _location.code != requestLocation.code) {
+              _location.code != requestLocation.smsCode) {
             return;
           }
           final latest = _latest;
@@ -368,6 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
               !latest.received.isBefore(requestStartedAt)) {
             return;
           }
+          setState(() => _waiting = false);
           unawaited(_loadFallbackWeather(requestId, requestLocation));
         });
       }
@@ -407,38 +421,108 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _showMapPin(MapPinUpdate pin) => showDialog<void>(
-    context: context,
-    builder:
-        (dialogContext) => AlertDialog(
-          title: Text(pin.label),
-          content: Text(
-            '${switch (pin.category) {
-              'flood' => 'Flood',
-              'evacuation' => 'Evacuation center',
-              _ => 'Road',
-            }} · ${switch (pin.status) {
-              'F' => 'Flooding now / full',
-              'W' => 'Water rising / watch',
-              'C' => 'No flooding now',
-              'O' => 'Open',
-              'L' => 'Light vehicles only',
-              'X' => 'Closed',
-              _ => 'Unknown',
-            }}\n'
-            '${pin.category == 'evacuation' ? 'Occupancy' : 'Severity'}: '
-            '${pin.intensity}%\n'
-            '${pin.latitude.toStringAsFixed(5)}, '
-            '${pin.longitude.toStringAsFixed(5)}',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
+  Future<void> _showMapPin(MapPinUpdate pin) async {
+    _pinBubbleTimer?.cancel();
+    _pinBubble?.remove();
+
+    final category = switch (pin.category) {
+      'flood' => 'Flood',
+      'evacuation' => 'Evacuation center',
+      _ => 'Road',
+    };
+    final status = switch (pin.status) {
+      'F' => 'Flooding now / full',
+      'W' => 'Water rising / watch',
+      'C' => 'No flooding now',
+      'O' => 'Open',
+      'L' => 'Light vehicles only',
+      'X' => 'Closed',
+      _ => 'Unknown',
+    };
+
+    _pinBubble = OverlayEntry(
+      builder:
+          (overlayContext) => Positioned(
+            left: 16,
+            right: 16,
+            bottom: 116,
+            child: Material(
+              color: Colors.transparent,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 430),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(overlayContext).colorScheme.surface,
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(18),
+                      topRight: Radius.circular(18),
+                      bottomLeft: Radius.circular(18),
+                      bottomRight: Radius.circular(4),
+                    ),
+                    border: Border.all(color: context.nimbusPalette.line),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              pin.label,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text('$category · $status'),
+                            Text(
+                              '${pin.category == 'evacuation' ? 'Occupancy' : 'Severity'}: ${pin.intensity}%',
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () {
+                          _pinBubbleTimer?.cancel();
+                          _pinBubble?.remove();
+                          _pinBubble = null;
+                        },
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ],
-        ),
-  );
+          ),
+    );
+
+    Overlay.of(context).insert(_pinBubble!);
+    _pinBubbleTimer = Timer(const Duration(seconds: 8), () {
+      _pinBubble?.remove();
+      _pinBubble = null;
+    });
+  }
+
+  Future<void> _restoreApiUrl() async {
+    const storage = FlutterSecureStorage();
+    final saved = await storage.read(key: LguApiService.apiUrlStorageKey);
+    if (saved == null || saved.trim().isEmpty) return;
+    final uri = Uri.tryParse(saved.trim());
+    if (uri == null ||
+        !uri.hasScheme ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty)
+      return;
+    if (!mounted) return;
+    _lguApi = LguApiService(baseUri: uri);
+    _refreshPublishedUpdate(_location.code);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -891,9 +975,11 @@ class _Sheet extends StatelessWidget {
   Widget _publishedContent(BuildContext context) {
     if (selected == 'P') {
       final pins =
-          smsPinSnapshotReceived
-              ? smsPins
-              : publishedUpdate?.mapPins ?? const <MapPinUpdate>[];
+          publishedUpdate != null
+              ? publishedUpdate!.mapPins
+              : apiLoading || apiError != null
+              ? (smsPinSnapshotReceived ? smsPins : const <MapPinUpdate>[])
+              : const <MapPinUpdate>[];
       if (pins.isEmpty) {
         return _Empty(
           'No map pins in the latest snapshot',
@@ -907,9 +993,9 @@ class _Sheet extends StatelessWidget {
               Icons.location_on_outlined,
               pin.intensity >= 70 ? NimbusColors.danger : NimbusColors.warning,
               switch (pin.category) {
-                'flood' => 'Flood',
-                'evacuation' => 'Evacuation center',
-                _ => 'Road',
+                'flood' => 'Flood pin',
+                'evacuation' => 'Evacuation pin',
+                _ => 'Road pin',
               },
               pin.label,
               '${pin.status} · ${pin.intensity}%',
@@ -1068,6 +1154,62 @@ class _Sheet extends StatelessWidget {
         );
       }
     }
+
+    final mapPins = update.mapPins;
+    if (selected == 'O') {
+      for (final pin in mapPins) {
+        out.add(
+          _Row(
+            Icons.location_on_outlined,
+            pin.intensity >= 70 ? NimbusColors.danger : NimbusColors.warning,
+            switch (pin.category) {
+              'flood' => 'Flood pin',
+              'evacuation' => 'Evacuation pin',
+              _ => 'Road pin',
+            },
+            pin.label,
+            '${pin.status} · ${pin.intensity}%',
+          ),
+        );
+      }
+    } else if (selected == 'F') {
+      for (final pin in mapPins.where((pin) => pin.category == 'flood')) {
+        out.add(
+          _Row(
+            Icons.waves,
+            pin.intensity >= 70 ? NimbusColors.danger : NimbusColors.warning,
+            'Flood pin',
+            pin.label,
+            '${pin.status} · ${pin.intensity}%',
+          ),
+        );
+      }
+    } else if (selected == 'E') {
+      for (final pin in mapPins.where((pin) => pin.category == 'evacuation')) {
+        out.add(
+          _Row(
+            Icons.home_outlined,
+            NimbusColors.primary,
+            'Evacuation pin',
+            pin.label,
+            '${pin.status} · ${pin.intensity}%',
+          ),
+        );
+      }
+    } else if (selected == 'R') {
+      for (final pin in mapPins.where((pin) => pin.category == 'road')) {
+        out.add(
+          _Row(
+            Icons.add_road,
+            pin.status == 'X' ? NimbusColors.danger : NimbusColors.warning,
+            'Road pin',
+            pin.label,
+            '${pin.status} · ${pin.intensity}%',
+          ),
+        );
+      }
+    }
+
     if (selected != 'O' && out.length == 1) {
       return _Empty(
         'No ${_selectedLabel} status',
@@ -1141,7 +1283,7 @@ class _Sheet extends StatelessWidget {
       ];
     }
     final out = <Widget>[];
-    if ((selected == 'O' || selected == 'Q' || selected == 'C') &&
+    if ((selected == 'O' || selected == 'Q') &&
         (weatherFallback != null ||
             weatherFallbackLoading ||
             weatherFallbackError != null)) {
@@ -1212,77 +1354,38 @@ class _Sheet extends StatelessWidget {
     switch (r.type) {
       case 'Q':
         final s = r.storm!;
-        final w = t.warnings[s.warning] ?? ('Storm update', '');
-        out
-          ..add(
+        if (r.notice.isNotEmpty &&
+            r.notice.toLowerCase().contains('no current storm')) {
+          out.add(
+            _Row(
+              Icons.cloud_off_outlined,
+              NimbusColors.ok,
+              'PAGASA status',
+              r.notice,
+              '$issued · No active local warning from the latest PAGASA update',
+            ),
+          );
+        } else {
+          out.add(
             _Row(
               Icons.warning_amber,
               NimbusColors.danger,
-              'Official warning (sample)',
-              w.$1,
-              '${w.$2} · $issued',
+              'PAGASA storm update',
+              r.notice.isEmpty ? 'PAGASA bulletin received' : r.notice,
+              '$issued · ${t.name}',
             ),
-          )
-          ..add(
-            const _Row(
-              Icons.air,
-              NimbusColors.primary,
-              'Storm movement (sample)',
-              'Moving west-northwest, about 20 km/h',
-              'Dots show where the storm has been',
-            ),
-          )
-          ..add(
+          );
+          out.add(
             _Row(
               Icons.cloud_outlined,
               NimbusColors.primary,
-              'Forecast',
+              'Storm forecast',
               '${_rain[s.rain.clamp(0, 4)]}, gusts ${s.gusts} km/h',
-              'General forecast for ${t.name}',
-            ),
-          );
-        if (selected == 'O' && s.evacSite > 0 && s.evacSite <= t.sites.length) {
-          final site = t.sites[s.evacSite - 1];
-          out.add(
-            s.evacStatus == 'O'
-                ? _Row(
-                  Icons.home_outlined,
-                  NimbusColors.ok,
-                  'LGU announcement',
-                  'Evacuate to $site',
-                  'Site open',
-                )
-                : _Row(
-                  Icons.home_outlined,
-                  NimbusColors.danger,
-                  'LGU announcement',
-                  '$site is ${s.evacStatus == 'F' ? 'full' : 'closed'}',
-                  'Open Evac to find a site with room',
-                ),
-          );
-        }
-        if (selected == 'O' && s.classes > 0) {
-          out.add(
-            _Row(
-              Icons.school_outlined,
-              NimbusColors.warning,
-              'LGU announcement',
-              'Classes suspended',
-              _classes[s.classes.clamp(0, 5)],
+              'Local municipality estimate',
             ),
           );
         }
-        if (selected == 'O' && r.notice.isNotEmpty) {
-          out.add(
-            _Row(
-              Icons.campaign_outlined,
-              NimbusColors.primary,
-              'LGU notice',
-              r.notice,
-              'From ${t.name} LGU',
-            ),
-          );
-        }
+        break;
       case 'F':
         for (final i in r.items) {
           final name =
@@ -1304,6 +1407,7 @@ class _Sheet extends StatelessWidget {
             ),
           );
         }
+        break;
       case 'E':
         for (final i in r.items) {
           final name =
@@ -1340,6 +1444,7 @@ class _Sheet extends StatelessWidget {
             ),
           });
         }
+        break;
       case 'R':
         for (final i in r.items) {
           final name =
