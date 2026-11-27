@@ -57,207 +57,162 @@ class _WelcomeScreenState extends State<WelcomeScreen>
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: context.nimbusPalette.background,
-    body: DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            context.nimbusPalette.background,
-            context.nimbusPalette.surfaceAlt,
-          ],
-        ),
-      ),
-      child: SafeArea(
-        child: Stack(
-          children: [
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 520),
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: context.nimbusPalette.surface,
-                      borderRadius: BorderRadius.circular(26),
-                      border: Border.all(color: context.nimbusPalette.line),
-                      boxShadow: [
-                        BoxShadow(
-                          color: NimbusColors.primary.withValues(alpha: 0.08),
-                          blurRadius: 28,
-                          offset: const Offset(0, 10),
+    backgroundColor: const Color(0xFFFDFDFF),
+    body: SafeArea(
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(painter: _SplashWavesPainter()),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              tooltip: 'Settings',
+              onPressed: widget.onSettings,
+              icon: Icon(Icons.settings_outlined,
+                  color: context.nimbusPalette.text),
+            ),
+          ),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FadeTransition(
+                      opacity: _fade,
+                      child: ScaleTransition(
+                        scale: _scale,
+                        child: Container(
+                          width: 148,
+                          height: 148,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F7FD),
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF6968C7).withValues(alpha: 0.10),
+                                blurRadius: 24,
+                              ),
+                            ],
+                          ),
+                          padding: const EdgeInsets.all(18),
+                          child: Image.asset(
+                            'assets/images/nmbus_mark.png',
+                            semanticLabel: 'NIMBUS rain cloud logo',
+                          ),
                         ),
-                      ],
+                      ),
                     ),
-                    child: Column(
-                      children: [
-                        FadeTransition(
-                          opacity: _fade,
-                          child: ScaleTransition(
-                            scale: _scale,
-                            child: Container(
-                              width: 184,
-                              height: 184,
-                              decoration: const BoxDecoration(
-                                color: NimbusColors.primary,
-                                shape: BoxShape.circle,
-                              ),
-                              padding: const EdgeInsets.all(14),
-                              child: Image.asset(
-                                'assets/images/nmbus_mark.png',
-                                semanticLabel: 'NIMBUS rain cloud logo',
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'NIMBUS',
-                          style: TextStyle(
-                            color: context.nimbusPalette.text,
-                            fontSize: 38,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.5,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Local flood and storm updates, wherever you are.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: context.nimbusPalette.muted,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 30),
-                        AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
-                          child:
-                              !_ready
-                                  ? const SizedBox(
-                                    key: ValueKey('intro-progress'),
-                                    height: 130,
-                                  )
-                                  : Column(
-                                    key: const ValueKey('role-prompt'),
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      Text(
-                                        'How will you use NIMBUS?',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: context.nimbusPalette.text,
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: _RoleCard(
-                                              icon: Icons.person_outline,
-                                              title: 'User',
-                                              subtitle: 'View local updates',
-                                              selected: _selectedRole == false,
-                                              onTap:
-                                                  () => setState(
-                                                    () => _selectedRole = false,
-                                                  ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: _RoleCard(
-                                              icon:
-                                                  Icons
-                                                      .account_balance_outlined,
-                                              title: 'LGU admin',
-                                              subtitle: 'Publish town updates',
-                                              selected: _selectedRole == true,
-                                              onTap:
-                                                  () => setState(
-                                                    () => _selectedRole = true,
-                                                  ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 18),
-                                      FilledButton(
-                                        onPressed:
-                                            _selectedRole == null ||
-                                                    widget.opening
-                                                ? null
-                                                : () => widget.onOpen(
-                                                  _selectedRole!,
-                                                ),
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: NimbusColors.primary,
-                                          foregroundColor: Colors.white,
-                                          minimumSize: const Size.fromHeight(
-                                            52,
-                                          ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              14,
-                                            ),
-                                          ),
-                                        ),
-                                        child:
-                                            widget.opening
-                                                ? const SizedBox.square(
-                                                  dimension: 20,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                        color: Colors.white,
-                                                      ),
-                                                )
-                                                : const Text('Open NIMBUS'),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      OutlinedButton.icon(
-                                        onPressed:
-                                            widget.opening
-                                                ? null
-                                                : widget.onOpenGateway,
-                                        icon: const Icon(Icons.cell_tower),
-                                        label: const Text(
-                                          'Open SMS gateway on this phone',
-                                        ),
-                                      ),
-                                    ],
+                    const SizedBox(height: 10),
+                    Text(
+                      'NIMBUS',
+                      style: TextStyle(
+                        color: context.nimbusPalette.text,
+                        fontSize: 34,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.8,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'Local flood and storm updates, wherever you are.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: context.nimbusPalette.muted,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 280),
+                      child: !_ready
+                          ? const SizedBox(
+                              key: ValueKey('intro-progress'), height: 220)
+                          : Column(
+                              key: const ValueKey('role-prompt'),
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  'How will you use NIMBUS?',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: context.nimbusPalette.text,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
                                   ),
-                        ),
-                        if (widget.error != null) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            widget.error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: NimbusColors.danger),
-                          ),
-                        ],
-                      ],
+                                ),
+                                const SizedBox(height: 14),
+                                _RoleCard(
+                                  icon: Icons.person_outline,
+                                  title: 'Resident',
+                                  subtitle: 'View LGU, weather, storm and map updates',
+                                  selected: _selectedRole == false,
+                                  prominent: true,
+                                  onTap: () => setState(() => _selectedRole = false),
+                                ),
+                                const SizedBox(height: 10),
+                                _RoleCard(
+                                  icon: Icons.account_balance_outlined,
+                                  title: 'LGU admin',
+                                  subtitle: 'Publish town updates',
+                                  selected: _selectedRole == true,
+                                  prominent: false,
+                                  onTap: () => setState(() => _selectedRole = true),
+                                ),
+                                const SizedBox(height: 14),
+                                FilledButton(
+                                  onPressed: _selectedRole == null || widget.opening
+                                      ? null
+                                      : () => widget.onOpen(_selectedRole!),
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: NimbusColors.primary,
+                                    foregroundColor: Colors.white,
+                                    minimumSize: const Size.fromHeight(54),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: widget.opening
+                                      ? const SizedBox.square(
+                                          dimension: 20,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2, color: Colors.white))
+                                      : const Text('Open NIMBUS'),
+                                ),
+                                const SizedBox(height: 6),
+                                TextButton.icon(
+                                  onPressed: widget.opening ? null : widget.onOpenGateway,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: context.nimbusPalette.muted,
+                                    minimumSize: const Size.fromHeight(36),
+                                  ),
+                                  icon: const Icon(Icons.cell_tower, size: 17),
+                                  label: const Text(
+                                    'Open SMS gateway on this phone',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ],
+                            ),
                     ),
-                  ),
+                    if (widget.error != null) ...[
+                      const SizedBox(height: 8),
+                      Text(widget.error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: NimbusColors.danger)),
+                    ],
+                  ],
                 ),
               ),
             ),
-            Positioned(
-              top: 4,
-              right: 4,
-              child: IconButton(
-                tooltip: 'Settings',
-                onPressed: widget.onSettings,
-                icon: const Icon(Icons.settings_outlined),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     ),
   );
@@ -270,6 +225,7 @@ class _RoleCard extends StatelessWidget {
     required this.subtitle,
     required this.selected,
     required this.onTap,
+    this.prominent = false,
   });
 
   final IconData icon;
@@ -277,6 +233,7 @@ class _RoleCard extends StatelessWidget {
   final String subtitle;
   final bool selected;
   final VoidCallback onTap;
+  final bool prominent;
 
   @override
   Widget build(BuildContext context) => AnimatedScale(
@@ -293,7 +250,7 @@ class _RoleCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
-          constraints: const BoxConstraints(minHeight: 128),
+          constraints: BoxConstraints(minHeight: prominent ? 148 : 82),
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             border: Border.all(
@@ -331,4 +288,61 @@ class _RoleCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _SplashWavesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bottom = size.height;
+
+    final back = Path()
+      ..moveTo(0, bottom * 0.82)
+      ..cubicTo(size.width * 0.18, bottom * 0.73, size.width * 0.35,
+          bottom * 0.88, size.width * 0.52, bottom * 0.78)
+      ..cubicTo(size.width * 0.70, bottom * 0.68, size.width * 0.86,
+          bottom * 0.82, size.width, bottom * 0.72)
+      ..lineTo(size.width, bottom)
+      ..lineTo(0, bottom)
+      ..close();
+    canvas.drawPath(back, Paint()..color = const Color(0xFFDDE8FB));
+
+    final mid = Path()
+      ..moveTo(0, bottom * 0.89)
+      ..cubicTo(size.width * 0.16, bottom * 0.79, size.width * 0.34,
+          bottom * 0.94, size.width * 0.52, bottom * 0.84)
+      ..cubicTo(size.width * 0.71, bottom * 0.74, size.width * 0.86,
+          bottom * 0.91, size.width, bottom * 0.82)
+      ..lineTo(size.width, bottom)
+      ..lineTo(0, bottom)
+      ..close();
+    canvas.drawPath(mid, Paint()..color = const Color(0xFF93B1E6));
+
+    final front = Path()
+      ..moveTo(0, bottom * 0.96)
+      ..cubicTo(size.width * 0.18, bottom * 0.86, size.width * 0.38,
+          bottom, size.width * 0.55, bottom * 0.91)
+      ..cubicTo(size.width * 0.74, bottom * 0.82, size.width * 0.88,
+          bottom * 0.96, size.width, bottom * 0.90)
+      ..lineTo(size.width, bottom)
+      ..lineTo(0, bottom)
+      ..close();
+    canvas.drawPath(front, Paint()..color = const Color(0xFF2F6FE4));
+
+    final highlight = Path()
+      ..moveTo(size.width * 0.26, bottom * 0.91)
+      ..cubicTo(size.width * 0.38, bottom * 0.86, size.width * 0.46,
+          bottom * 0.96, size.width * 0.62, bottom * 0.89)
+      ..cubicTo(size.width * 0.74, bottom * 0.84, size.width * 0.86,
+          bottom * 0.92, size.width, bottom * 0.86)
+      ..lineTo(size.width, bottom * 0.94)
+      ..cubicTo(size.width * 0.86, bottom, size.width * 0.72,
+          bottom * 0.91, size.width * 0.60, bottom * 0.97)
+      ..cubicTo(size.width * 0.45, bottom, size.width * 0.34,
+          bottom * 0.91, size.width * 0.26, bottom * 0.91)
+      ..close();
+    canvas.drawPath(highlight, Paint()..color = const Color(0xFFFFFFFF));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

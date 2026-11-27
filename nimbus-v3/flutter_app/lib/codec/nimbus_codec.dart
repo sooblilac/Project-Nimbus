@@ -218,6 +218,12 @@ Item? _parseField(String type, String part) {
       customName: m.group(3)?.replaceAll('_', ' '),
     );
   }
+  if (type == 'C' && (m = RegExp(r'^C([0-5])$').firstMatch(part)) != null) {
+    return Item(0, level: m!.group(1));
+  }
+  if (type == 'A') {
+    return Item(0);
+  }
   return null;
 }
 

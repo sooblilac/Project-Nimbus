@@ -9,7 +9,7 @@ import 'ui/gateway_screen.dart';
 import 'ui/lgu_dashboard_screen.dart';
 import 'ui/settings_panel.dart';
 import 'ui/theme.dart';
-import 'ui/welcome_screen.dart';
+import 'ui/welcome_screen_v2.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -164,7 +164,7 @@ class _NimbusAppState extends State<NimbusApp> {
     debugShowCheckedModeBanner: false,
     theme: nimbusTheme(dark: _darkMode),
     home: switch (_page) {
-      _AppPage.landing => WelcomeScreen(
+      _AppPage.landing => WelcomeScreenV2(
         opening: _opening,
         error: _openError,
         onOpen: _open,

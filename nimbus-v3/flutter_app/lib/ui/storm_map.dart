@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,17 @@ import '../data/philippine_location.dart';
 import '../lgu/lgu_api.dart';
 import 'offline_map_plan.dart';
 import 'theme.dart';
+
+/// Bundled UP NOAH flood hazard maps (100-year rain), keyed by PSGC town code.
+/// See assets/data/hazards/ATTRIBUTION.md for source and license (ODbL).
+const _floodHazardAssets = {
+  '0401005000': 'assets/data/hazards/noah_flood_100yr_0401005000.geojson',
+};
+const _hazardSourceId = 'noah-flood-hazard';
+const _hazardLayerId = 'noah-flood-hazard-fill';
+const _hazardLow = Color(0xFFF5D76E);
+const _hazardMedium = Color(0xFFF0A030);
+const _hazardHigh = NimbusColors.danger;
 
 class StormMap extends StatefulWidget {
   const StormMap({
@@ -63,6 +75,15 @@ class _StormMapState extends State<StormMap> {
   MapPinUpdate? _selectedPin;
   Offset? _selectedPinScreenPoint;
   double _cameraZoom = 5.2;
+  bool _showPinLabels = true;
+  bool _pinLabelUpdateInFlight = false;
+  bool _pinLabelUpdatePending = false;
+  final Map<String, Offset> _pinLabelPositions = {};
+  bool _showFloodHazard = false;
+  String? _hazardOnMapCode;
+  Future<void> _hazardQueue = Future<void>.value();
+
+  String? get _hazardAsset => _floodHazardAssets[widget.location.code];
 
   @override
   void initState() {
@@ -83,6 +104,7 @@ class _StormMapState extends State<StormMap> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.location.code != widget.location.code) {
       unawaited(_focusLocation());
+      unawaited(_syncFloodHazard());
     }
     if (oldWidget.location.code != widget.location.code ||
         oldWidget.floodReported != widget.floodReported) {
@@ -91,6 +113,7 @@ class _StormMapState extends State<StormMap> {
     if (oldWidget.location.code != widget.location.code ||
         oldWidget.mapPins != widget.mapPins) {
       unawaited(_syncPins());
+      unawaited(_updatePinLabelPositions());
     }
   }
 
@@ -134,12 +157,50 @@ class _StormMapState extends State<StormMap> {
 
   void _onMapCreated(ml.MapLibreMapController controller) {
     _controller = controller;
+    _cameraZoom = _locationZoom;
     controller.onCircleTapped.add(_onCircleTapped);
   }
 
   void _onCircleTapped(ml.Circle circle) {
     final pin = _pinMarkers[circle];
-    if (pin != null) _showPinBubble(pin);
+    if (pin != null) {
+      setState(() => _selectedPin = pin);
+      unawaited(_updateSelectedPinPosition());
+      widget.onPinTapped?.call(pin);
+    }
+  }
+
+  Future<void> _updateSelectedPinPosition() async {
+    final controller = _controller;
+    final pin = _selectedPin;
+    if (!mounted || controller == null || pin == null || _cameraZoom < 10.5) {
+      if (mounted && _selectedPinScreenPoint != null) {
+        setState(() => _selectedPinScreenPoint = null);
+      }
+      return;
+    }
+    try {
+      final point = await controller.toScreenLocation(
+        ml.LatLng(pin.latitude, pin.longitude),
+      );
+      if (!mounted || _selectedPin != pin) return;
+      setState(() => _selectedPinScreenPoint = _toLogicalOffset(point));
+    } catch (_) {
+      if (mounted) setState(() => _selectedPinScreenPoint = null);
+    }
+  }
+
+  void _onCameraMove(ml.CameraPosition position) {
+    _cameraZoom = position.zoom;
+    if (_selectedPin != null && position.zoom < 10.5 && _selectedPinScreenPoint != null) {
+      setState(() => _selectedPinScreenPoint = null);
+    }
+    unawaited(_updatePinLabelPositions());
+  }
+
+  void _onCameraIdle() {
+    unawaited(_updateSelectedPinPosition());
+    unawaited(_updatePinLabelPositions());
   }
 
   Future<void> _showPinBubble(MapPinUpdate pin) async {
@@ -160,43 +221,35 @@ class _StormMapState extends State<StormMap> {
       if (!mounted) return;
       setState(() {
         _selectedPin = pin;
-        _selectedPinScreenPoint = Offset(point.x.toDouble(), point.y.toDouble());
-      });
-    } catch (_) {}
-  }
-
-  void _onCameraMove(ml.CameraPosition position) {
-    _cameraZoom = position.zoom;
-    if (_selectedPin != null) {
-      if (position.zoom < 11) {
-        if (mounted) setState(() {
-          _selectedPin = null;
-          _selectedPinScreenPoint = null;
-        });
-      } else {
-        unawaited(_refreshSelectedPinPosition());
-      }
-    }
-  }
-
-  Future<void> _refreshSelectedPinPosition() async {
-    final pin = _selectedPin;
-    final controller = _controller;
-    if (pin == null || controller == null) return;
-    try {
-      final point = await controller.toScreenLocation(
-        ml.LatLng(pin.latitude, pin.longitude),
-      );
-      if (!mounted || _selectedPin != pin) return;
-      setState(() {
-        _selectedPinScreenPoint = Offset(point.x.toDouble(), point.y.toDouble());
+        _selectedPinScreenPoint = _toLogicalOffset(point);
       });
     } catch (_) {}
   }
 
   void _onMapClick(ml.LatLng coordinates) {
-    if (!widget.pinPlacementMode) return;
-    widget.onMapTap?.call(coordinates.latitude, coordinates.longitude);
+    if (widget.pinPlacementMode) {
+      widget.onMapTap?.call(coordinates.latitude, coordinates.longitude);
+      return;
+    }
+
+    MapPinUpdate? nearest;
+    var nearestDistance = double.infinity;
+    for (final pin in widget.mapPins) {
+      final latitudeDistance = coordinates.latitude - pin.latitude;
+      final longitudeDistance =
+          (coordinates.longitude - pin.longitude) *
+          math.cos(pin.latitude * math.pi / 180);
+      final distance = math.sqrt(
+        latitudeDistance * latitudeDistance + longitudeDistance * longitudeDistance,
+      );
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = pin;
+      }
+    }
+    if (nearest != null && nearestDistance < 0.008) {
+      unawaited(_showPinBubble(nearest));
+    }
   }
 
   void _onFallbackMapTap(Offset viewportPosition, Size size) {
@@ -234,7 +287,7 @@ class _StormMapState extends State<StormMap> {
         pin.latitude,
       );
       if ((mapPosition - pinPosition).distance <= 18) {
-        widget.onPinTapped?.call(pin);
+        unawaited(_showPinBubble(pin));
         return;
       }
     }
@@ -242,15 +295,19 @@ class _StormMapState extends State<StormMap> {
 
   void _onStyleLoaded() {
     _styleLoadTimer?.cancel();
+    _cameraZoom = _locationZoom;
     _styleLoaded = true;
     if (_mapUnavailable && mounted) {
       setState(() => _mapUnavailable = false);
     }
     _locationMarker = null;
     _pinMarkers.clear();
+    _hazardOnMapCode = null; // a new style drops custom sources and layers
+    unawaited(_syncFloodHazard());
     unawaited(_focusLocation());
     unawaited(_syncLocationMarker());
     unawaited(_syncPins());
+    unawaited(_updatePinLabelPositions());
   }
 
   void _startStyleLoadTimer() {
@@ -681,6 +738,18 @@ class _StormMapState extends State<StormMap> {
   String _hexColor(Color color) =>
       '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
+  /// MapLibre on Android reports screen points in physical pixels, while
+  /// Flutter lays out in logical pixels; iOS and web already use logical ones.
+  Offset _toLogicalOffset(math.Point<num> point) {
+    final scale = !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+        ? MediaQuery.devicePixelRatioOf(context)
+        : 1.0;
+    return Offset(point.x / scale, point.y / scale);
+  }
+
+  String _pinKey(MapPinUpdate pin) =>
+      '${pin.category}|${pin.label}|${pin.latitude}|${pin.longitude}|${pin.status}|${pin.intensity}';
+
   @override
   Widget build(BuildContext context) => Semantics(
     label:
@@ -703,6 +772,7 @@ class _StormMapState extends State<StormMap> {
             onMapCreated: _onMapCreated,
             onStyleLoadedCallback: _onStyleLoaded,
             onCameraMove: _onCameraMove,
+            onCameraIdle: _onCameraIdle,
             onMapClick: (_, coordinates) => _onMapClick(coordinates),
             gestureRecognizers: {
               Factory<OneSequenceGestureRecognizer>(
@@ -817,6 +887,49 @@ class _StormMapState extends State<StormMap> {
             ),
           ),
         Positioned(
+          right: 12,
+          top: 198,
+          child: FloatingActionButton.small(
+            heroTag: 'pin-label-toggle',
+            tooltip: _showPinLabels ? 'Hide pin labels' : 'Show pin labels',
+            backgroundColor: _showPinLabels
+                ? NimbusColors.primary
+                : context.nimbusPalette.surface,
+            foregroundColor: _showPinLabels
+                ? Colors.white
+                : context.nimbusPalette.text,
+            onPressed: _togglePinLabels,
+            child: Icon(_showPinLabels
+                ? Icons.label_off_outlined
+                : Icons.label_outline),
+          ),
+        ),
+        if (_hazardAsset != null)
+          Positioned(
+            right: 12,
+            top: 254,
+            child: FloatingActionButton.small(
+              heroTag: 'flood-hazard-toggle',
+              tooltip: _showFloodHazard
+                  ? 'Hide flood-prone areas'
+                  : 'Show flood-prone areas',
+              backgroundColor: _showFloodHazard
+                  ? NimbusColors.primary
+                  : context.nimbusPalette.surface,
+              foregroundColor: _showFloodHazard
+                  ? Colors.white
+                  : context.nimbusPalette.text,
+              onPressed: _toggleFloodHazard,
+              child: const Icon(Icons.flood_outlined),
+            ),
+          ),
+        if (_showFloodHazard && _hazardAsset != null && !_mapUnavailable)
+          Positioned(
+            left: 12,
+            bottom: widget.attributionBottomInset + 32,
+            child: const _FloodHazardLegend(),
+          ),
+        Positioned(
           left: 12,
           bottom: widget.attributionBottomInset,
           child: DecoratedBox(
@@ -836,75 +949,235 @@ class _StormMapState extends State<StormMap> {
             ),
           ),
         ),
-        if (_selectedPin != null && _selectedPinScreenPoint != null)
+        if (_selectedPin != null &&
+            _selectedPinScreenPoint != null &&
+            _cameraZoom >= 10.5)
           LayoutBuilder(
             builder: (context, constraints) {
-              final point = _selectedPinScreenPoint!;
-              const bubbleWidth = 220.0;
-              final left = (point.dx - bubbleWidth / 2)
-                  .clamp(8.0, constraints.maxWidth - bubbleWidth - 8.0);
-              final top = (point.dy - 88)
-                  .clamp(8.0, constraints.maxHeight - 110.0);
               final pin = _selectedPin!;
+              final point = _selectedPinScreenPoint!;
+              const bubbleWidth = 230.0;
+              final left = math
+                  .max(8.0, math.min(point.dx - bubbleWidth / 2,
+                      constraints.maxWidth - bubbleWidth - 8))
+                  .toDouble();
+              final top = math.max(8.0, point.dy - 92).toDouble();
               final status = switch (pin.status) {
                 'F' => pin.category == 'evacuation' ? 'Full' : 'Flooding now',
-                'W' => 'On watch',
+                'W' => 'Water rising / watch',
                 'C' => 'No flooding now',
                 'O' => 'Open',
-                'L' => 'Light vehicles only',
+                'L' => 'Limited access',
                 'X' => 'Closed',
-                _ => 'Unknown status',
+                _ => 'Status unavailable',
               };
-              return Positioned(
-                left: left,
-                top: top,
-                width: bubbleWidth,
-                child: Material(
-                  elevation: 6,
-                  color: context.nimbusPalette.surface,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(14),
-                    topRight: Radius.circular(14),
-                    bottomLeft: Radius.circular(14),
-                    bottomRight: Radius.circular(4),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(14),
-                    onTap: () => setState(() {
-                      _selectedPin = null;
-                      _selectedPinScreenPoint = null;
-                    }),
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            pin.label,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(status,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: context.nimbusPalette.muted,
-                              )),
-                          Text('${pin.intensity}% intensity',
-                              style: const TextStyle(fontSize: 12)),
-                        ],
+              final category = switch (pin.category) {
+                'flood' => 'Flood',
+                'evacuation' => 'Evacuation center',
+                _ => 'Road',
+              };
+              return Stack(
+                children: [
+                  Positioned(
+                    left: point.dx - 6,
+                    top: point.dy - 6,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: _pinColorFor(pin),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  Positioned(
+                    left: left,
+                    top: top,
+                    child: Material(
+                      elevation: 6,
+                      shadowColor: Colors.black26,
+                      color: context.nimbusPalette.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        width: bubbleWidth,
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: context.nimbusPalette.line),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(pin.label,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                                  const SizedBox(height: 2),
+                                  Text(category,
+                                      style: TextStyle(fontSize: 12,
+                                          color: context.nimbusPalette.muted)),
+                                  Text(status,
+                                      style: const TextStyle(fontSize: 13,
+                                          fontWeight: FontWeight.w800)),
+                                  Text('${pin.category == 'evacuation' ? 'Occupancy' : 'Intensity'}: ${pin.intensity}%',
+                                      style: const TextStyle(fontSize: 12)),
+                                ],
+                              ),
+                            ),
+                            InkWell(
+                              onTap: () => setState(() {
+                                _selectedPin = null;
+                                _selectedPinScreenPoint = null;
+                              }),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close, size: 16),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               );
             },
           ),
+        if (_showPinLabels)
+          ...widget.mapPins.map((pin) {
+            final position = _pinLabelPositions[_pinKey(pin)];
+            if (position == null) return const SizedBox.shrink();
+            return Positioned(
+              // Bubble tail tip sits 169px from the left, 73px from the top.
+              left: position.dx - 169,
+              top: position.dy - 80,
+              child: _PinSpeechBubble(pin: pin),
+            );
+          }).toList(),
       ],
     ),
   );
+
+  void _toggleFloodHazard() {
+    setState(() => _showFloodHazard = !_showFloodHazard);
+    unawaited(_syncFloodHazard());
+  }
+
+  /// Adds, swaps or removes the NOAH flood hazard layer to match the toggle
+  /// and the selected town. Calls are queued so they never overlap.
+  Future<void> _syncFloodHazard() {
+    return _hazardQueue = _hazardQueue.then((_) async {
+      final controller = _controller;
+      if (!mounted || controller == null || !_styleLoaded) return;
+      final wanted = _showFloodHazard && _hazardAsset != null
+          ? widget.location.code
+          : null;
+      if (wanted == _hazardOnMapCode) return;
+      try {
+        if (_hazardOnMapCode != null) {
+          await controller.removeLayer(_hazardLayerId);
+          await controller.removeSource(_hazardSourceId);
+          _hazardOnMapCode = null;
+        }
+        if (wanted == null) return;
+        final geojson = jsonDecode(
+          await rootBundle.loadString(_floodHazardAssets[wanted]!),
+        ) as Map<String, dynamic>;
+        await controller.addGeoJsonSource(_hazardSourceId, geojson);
+        await controller.addFillLayer(
+          _hazardSourceId,
+          _hazardLayerId,
+          ml.FillLayerProperties(
+            fillColor: [
+              'match',
+              ['get', 'Var'],
+              3,
+              _hexColor(_hazardHigh),
+              2,
+              _hexColor(_hazardMedium),
+              _hexColor(_hazardLow),
+            ],
+            fillOpacity: 0.45,
+          ),
+          // Keep street names and the LGU pins readable on top.
+          belowLayerId: await _firstLabelLayerId(controller),
+        );
+        _hazardOnMapCode = wanted;
+      } on PlatformException catch (error) {
+        _showMessage(
+          'Could not show flood-prone areas: ${error.message ?? error.code}',
+        );
+      }
+    }).catchError((_) {});
+  }
+
+  /// The first symbol (label) layer in the style, so fills go underneath it.
+  Future<String?> _firstLabelLayerId(ml.MapLibreMapController controller) async {
+    try {
+      final style = await controller.getStyle();
+      if (style == null) return null;
+      final layers = (jsonDecode(style) as Map<String, dynamic>)['layers'];
+      if (layers is! List) return null;
+      for (final layer in layers) {
+        if (layer is Map && layer['type'] == 'symbol') return layer['id'] as String?;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  void _togglePinLabels() {
+    setState(() {
+      _showPinLabels = !_showPinLabels;
+      _pinLabelPositions.clear();
+    });
+    if (_showPinLabels) unawaited(_updatePinLabelPositions());
+  }
+
+  Future<void> _updatePinLabelPositions() async {
+    final controller = _controller;
+    if (!_showPinLabels || controller == null || !_styleLoaded) return;
+    if (_pinLabelUpdateInFlight) {
+      _pinLabelUpdatePending = true;
+      return;
+    }
+    if (widget.mapPins.isEmpty) {
+      if (_pinLabelPositions.isNotEmpty) {
+        setState(_pinLabelPositions.clear);
+      }
+      return;
+    }
+    _pinLabelUpdateInFlight = true;
+    try {
+      final next = <String, Offset>{};
+      for (final pin in widget.mapPins) {
+        final point = await controller.toScreenLocation(
+          ml.LatLng(pin.latitude, pin.longitude),
+        );
+        next[_pinKey(pin)] = _toLogicalOffset(point);
+      }
+      if (!mounted || !_showPinLabels) return;
+      setState(() {
+        _pinLabelPositions
+          ..clear()
+          ..addAll(next);
+      });
+    } catch (_) {
+    } finally {
+      _pinLabelUpdateInFlight = false;
+      if (_pinLabelUpdatePending) {
+        _pinLabelUpdatePending = false;
+        unawaited(_updatePinLabelPositions());
+      }
+    }
+  }
 }
 
 Color _pinColorFor(MapPinUpdate pin) {
@@ -1024,4 +1297,166 @@ class _PhilippinesOutlinePainter extends CustomPainter {
       oldDelegate.location != location ||
       oldDelegate.mapPins != mapPins ||
       oldDelegate.palette != palette;
+}
+
+class _PinSpeechBubble extends StatelessWidget {
+  const _PinSpeechBubble({required this.pin});
+
+  final MapPinUpdate pin;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = switch (pin.status) {
+      'F' => pin.category == 'evacuation' ? 'Full' : 'Flooding',
+      'W' => 'Watch',
+      'C' => 'Clear',
+      'O' => 'Open',
+      'L' => 'Limited',
+      'X' => 'Closed',
+      _ => 'Unknown',
+    };
+    final category = switch (pin.category) {
+      'flood' => 'Flood',
+      'evacuation' => 'Evacuation',
+      _ => 'Road',
+    };
+
+    return SizedBox(
+      width: 210,
+      height: 70,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            right: 34,
+            bottom: 0,
+            child: Transform.rotate(
+              angle: math.pi / 4,
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: context.nimbusPalette.surface,
+                  border: Border(
+                    right: BorderSide(color: context.nimbusPalette.line),
+                    bottom: BorderSide(color: context.nimbusPalette.line),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Material(
+            elevation: 5,
+            color: context.nimbusPalette.surface,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(18),
+              topRight: Radius.circular(18),
+              bottomLeft: Radius.circular(18),
+              bottomRight: Radius.circular(5),
+            ),
+            child: Container(
+              width: 210,
+              height: 58,
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              decoration: BoxDecoration(
+                border: Border.all(color: _pinColorFor(pin), width: 2),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  topRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(18),
+                  bottomRight: Radius.circular(5),
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(pin.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 2),
+                  Text('$category · $status',
+                      style: TextStyle(fontSize: 11, color: context.nimbusPalette.muted)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FloodHazardLegend extends StatelessWidget {
+  const _FloodHazardLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.nimbusPalette;
+    Widget swatch(Color color, String label) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.75),
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(label, style: TextStyle(fontSize: 12.5, color: palette.text)),
+      ],
+    );
+    return Semantics(
+      container: true,
+      label:
+          'Flood-prone areas in very heavy rain. Yellow low, orange medium, '
+          'red high. Source UP NOAH, 100-year rain.',
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        decoration: BoxDecoration(
+          color: palette.surface.withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(
+              color: NimbusColors.primary.withValues(alpha: 0.12),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Flood-prone in heavy rain',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 10,
+              children: [
+                swatch(_hazardLow, 'Low'),
+                swatch(_hazardMedium, 'Medium'),
+                swatch(_hazardHigh, 'High'),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'UP NOAH · 100-yr rain · not live',
+              style: TextStyle(fontSize: 11, color: palette.muted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

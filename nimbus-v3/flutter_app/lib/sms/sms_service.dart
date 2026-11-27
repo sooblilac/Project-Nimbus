@@ -152,6 +152,24 @@ class SmsService implements PinSnapshotSender {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> cacheJson(String key, String json) async {
+    await _db.insert('app_settings', {
+      'key': 'cache:$key',
+      'value': json,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<String?> cachedJson(String key) async {
+    final rows = await _db.query(
+      'app_settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['cache:$key'],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.single['value'] as String;
+  }
+
   Future<bool> getDarkMode() async {
     final rows = await _db.query(
       'app_settings',
@@ -299,7 +317,7 @@ class SmsService implements PinSnapshotSender {
       return;
     }
 
-    final request = RegExp(r'^NB1 ASK ([QFERCP]) ((?:\d{4}|\d{10}))$').firstMatch(body);
+    final request = RegExp(r'^NB1 ASK ([QFERCPA]) ((?:\d{4}|\d{10}))$').firstMatch(body);
     if (request == null || from.trim().isEmpty) return;
     final type = request.group(1)!;
     final townCode = request.group(2)!;
@@ -444,6 +462,15 @@ class SmsService implements PinSnapshotSender {
   Future<void> _saveLguSmsUpdates(String townCode, Map<String, dynamic> update) async {
     final now = DateTime.now();
     final time = '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+
+    final notice = _notice(update);
+    if (notice.isNotEmpty) {
+      await injectEncodedReply(
+        codec.encode('A', townCode, const [], time, notice),
+        'A',
+        townCode,
+      );
+    }
 
     final classes = update['classes'];
     if (classes is int) {
