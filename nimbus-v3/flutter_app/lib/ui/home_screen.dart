@@ -21,7 +21,7 @@ const _tabs = [
     'Overview',
     Icons.dashboard_outlined,
     'Overview',
-    'Get storm update by SMS',
+    'Get all updates by SMS',
   ),
   (
     'Q',
@@ -137,6 +137,51 @@ class _HomeScreenState extends State<HomeScreen> {
     _panelController.addListener(_syncPanelExpanded);
     _location = widget.locations.first;
     unawaited(_initializeDemoAndRefresh());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshPublishedUpdate(_location.code);
+    });
+    _sub = widget.sms.replies.listen((u) async {
+      final saved = await widget.sms.saved();
+      if (!mounted) return;
+      final isCurrentReply =
+          u.type == _requestType &&
+          u.townCode == _requestTownCode &&
+          _requestStartedAt != null &&
+          !u.received.isBefore(_requestStartedAt!);
+      setState(() {
+        _saved = saved;
+        if (u.type == 'P' && u.townCode == _location.smsCode) {
+          final pinReply = codec.decode(u.sms);
+          if (pinReply != null && pinReply.valid) {
+            _smsPins = [
+              for (final pin in pinReply.pins)
+                MapPinUpdate(
+                  category: pin.category,
+                  label: pin.label,
+                  latitude: pin.latitude,
+                  longitude: pin.longitude,
+                  status: pin.status,
+                  intensity: pin.intensity,
+                ),
+            ];
+            _smsPinSnapshotReceived = true;
+          }
+        }
+        if (isCurrentReply) {
+          _waiting = false;
+          if (u.type == 'Q') {
+            _weatherFallbackTimer?.cancel();
+            _weatherFallback = null;
+            _weatherFallbackLoading = false;
+            _weatherFallbackError = null;
+          }
+        }
+      });
+    });
+    widget.sms.saved().then((s) {
+      if (mounted) setState(() => _saved = s);
+    });
+    unawaited(_restoreApiUrl());
   }
 
   @override
@@ -223,7 +268,64 @@ class _HomeScreenState extends State<HomeScreen> {
           ? _publishedUpdate?.mapPins ?? const []
           : _smsPinSnapshotReceived
           ? _smsPins
-          : const [];
+          : _smsLguUpdate?.mapPins ?? const [];
+
+  /// What residents see offline: the LGU picture rebuilt from the newest saved
+  /// SMS reply of each type for this town. Null when no replies exist.
+  LguUpdate? get _smsLguUpdate {
+    final key = (identityHashCode(_saved), _location.smsCode);
+    if (key == _smsLguKey) return _smsLguCache;
+    _smsLguKey = key;
+    return _smsLguCache = _buildSmsLguUpdate();
+  }
+
+  (int, String)? _smsLguKey;
+  LguUpdate? _smsLguCache;
+
+  LguUpdate? _buildSmsLguUpdate() {
+    final code = _location.smsCode;
+    final latest = <String, (codec.Reply, DateTime)>{};
+    for (final u in _saved) {
+      if (u.townCode != code || latest.containsKey(u.type)) continue;
+      final r = codec.decode(u.sms);
+      if (r != null && r.valid) latest[u.type] = (r, u.received);
+    }
+    if (latest.isEmpty) return null;
+    String name(codec.Item i, String fallback) => i.customName ?? '$fallback ${i.index}';
+    final q = latest['Q']?.$1;
+    var notice = q?.notice ?? '';
+    final noStorm = notice.toLowerCase().indexOf('no current storm');
+    if (noStorm >= 0) notice = notice.substring(0, noStorm).trim();
+    return LguUpdate(
+      townCode: code,
+      classes: q?.storm?.classes ?? 0,
+      notice: notice,
+      floodAreas: [
+        for (final i in latest['F']?.$1.items ?? const <codec.Item>[])
+          FloodAreaUpdate(name: name(i, 'Area'), level: i.level ?? 'L', status: i.now ?? 'C'),
+      ],
+      evacuationCenters: [
+        for (final i in latest['E']?.$1.items ?? const <codec.Item>[])
+          EvacuationCenterUpdate(name: name(i, 'Site'), status: i.status ?? 'O', percentFull: i.percentFull ?? 0),
+      ],
+      roadStatuses: [
+        for (final i in latest['R']?.$1.items ?? const <codec.Item>[])
+          RoadStatusUpdate(name: name(i, 'Road'), status: i.status ?? 'O'),
+      ],
+      mapPins: [
+        for (final pin in latest['P']?.$1.pins ?? const <codec.MapPin>[])
+          MapPinUpdate(
+            category: pin.category,
+            label: pin.label,
+            latitude: pin.latitude,
+            longitude: pin.longitude,
+            status: pin.status,
+            intensity: pin.intensity,
+          ),
+      ],
+      updatedAt: latest.values.map((e) => e.$2).reduce((a, b) => a.isAfter(b) ? a : b),
+    );
+  }
 
   void _onLocationChanged(
     PhilippineLocation location, {
@@ -333,7 +435,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _weatherFallbackError = null;
     });
     try {
-      await widget.sms.ask(_smsType, _location.smsCode);
+      // Overview asks for everything (A); the relay replies once per update type.
+      await widget.sms.ask(_tab == 'O' ? 'A' : _smsType, _location.smsCode);
       if (!mounted || requestId != _weatherRequestId) return;
       if (_smsType == 'Q') {
         _weatherFallbackTimer = Timer(const Duration(seconds: 20), () {
@@ -727,7 +830,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   waiting: _waiting,
                   latest: latest,
                   reply: reply,
-                  publishedUpdate: _publishedUpdate,
+                  publishedUpdate: _publishedUpdate ?? _smsLguUpdate,
                   smsPins: _smsPins,
                   smsPinSnapshotReceived: _smsPinSnapshotReceived,
                   weatherFallback: _weatherFallback,
@@ -1184,8 +1287,7 @@ class _Sheet extends StatelessWidget {
     final showAdvisory =
         _isOverview &&
         update != null &&
-        update.notice.isNotEmpty &&
-        apiError == null;
+        update.notice.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
         color: palette.surface,
@@ -1341,12 +1443,18 @@ class _Sheet extends StatelessWidget {
   Widget _overviewDigest(BuildContext context, {required bool collapsed}) {
     final onTap = collapsed ? onToggleExpanded : null;
     final error = apiError;
-    if (error != null) {
+    if (error != null && publishedUpdate == null) {
+      final sms = latest;
+      final hasSms = sms != null && sms.townCode == location.smsCode;
       return _Digest(
-        sev: _Sev.warning,
-        icon: Icons.cloud_off_outlined,
-        headline: 'Can’t reach the LGU right now',
-        detail: 'Check your signal, or get the storm update by SMS below.',
+        sev: hasSms ? _Sev.neutral : _Sev.warning,
+        icon: hasSms ? Icons.sms_outlined : Icons.cloud_off_outlined,
+        headline: hasSms
+            ? 'Offline · showing the SMS update'
+            : 'Can’t reach the LGU right now',
+        detail: hasSms
+            ? 'The latest LGU update arrived by SMS. See below.'
+            : 'Check your signal, or get the storm update by SMS below.',
         collapsed: collapsed,
         onTap: onTap,
         action: TextButton(
@@ -1451,7 +1559,7 @@ class _Sheet extends StatelessWidget {
       );
     }
     final error = apiError;
-    if (error != null) {
+    if (error != null && publishedUpdate == null) {
       if (_isOverview) return const SizedBox.shrink();
       return Padding(
         padding: const EdgeInsets.only(top: 12),
@@ -1771,14 +1879,23 @@ class _Sheet extends StatelessWidget {
     switch (r.type) {
       case 'Q':
         final s = r.storm!;
-        if (r.notice.isNotEmpty &&
-            r.notice.toLowerCase().contains('no current storm')) {
+        final noStormAt = r.notice.toLowerCase().indexOf('no current storm');
+        if (noStormAt >= 0) {
+          // The relay puts the LGU advisory before the PAGASA "no storm" line.
+          final lguNotice = r.notice.substring(0, noStormAt).trim();
+          if (lguNotice.isNotEmpty) {
+            rows.add(
+              _Row(Icons.campaign_outlined, NimbusColors.primary, 'LGU',
+                  lguNotice, ''),
+            );
+          }
+          if (s.classes > 0) rows.add(_classesRow(s.classes));
           rows.add(
             _Row(
               Icons.cloud_off_outlined,
               NimbusColors.ok,
               'PAGASA',
-              r.notice,
+              r.notice.substring(noStormAt).trim(),
               '',
             ),
           );
@@ -1835,9 +1952,11 @@ class _Sheet extends StatelessWidget {
       case 'E':
         numbered = true;
         for (final i in r.items) {
-          final name = i.index <= t.sites.length
-              ? t.sites[i.index - 1]
-              : 'Site ${i.index}';
+          final name =
+              i.customName ??
+              (i.index <= t.sites.length
+                  ? t.sites[i.index - 1]
+                  : 'Site ${i.index}');
           final pct = i.percentFull ?? 0;
           rows.add(switch (i.status) {
             'F' => _Row(

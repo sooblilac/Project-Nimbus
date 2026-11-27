@@ -54,6 +54,26 @@ class StormMap extends StatefulWidget {
 
 class _StormMapState extends State<StormMap> {
   static const _styleUrl = 'https://tiles.openfreemap.org/styles/liberty';
+  static const _darkStyleUrl = 'https://tiles.openfreemap.org/styles/dark';
+
+  /// Dark map in dark mode. Offline packs are saved with the light style, so if the
+  /// dark style can't load (offline, never cached) we fall back to light.
+  bool _darkStyleFailed = false;
+  String? _appliedStyleUrl;
+  String get _activeStyleUrl =>
+      Theme.of(context).brightness == Brightness.dark && !_darkStyleFailed
+          ? _darkStyleUrl
+          : _styleUrl;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final next = _activeStyleUrl;
+    if (_appliedStyleUrl != null && next != _appliedStyleUrl && _controller != null) {
+      _appliedStyleUrl = next;
+      unawaited(_reloadMapStyle());
+    }
+  }
   static const _userAgent = 'Nimbus/3.0 (Android; offline map client)';
 
   ml.MapLibreMapController? _controller;
@@ -192,10 +212,14 @@ class _StormMapState extends State<StormMap> {
 
   void _onCameraMove(ml.CameraPosition position) {
     _cameraZoom = position.zoom;
-    if (_selectedPin != null && position.zoom < 10.5 && _selectedPinScreenPoint != null) {
-      setState(() => _selectedPinScreenPoint = null);
+    // Chasing the camera with platform calls every frame makes zoom/pan stutter.
+    // Hide the overlays while moving; _onCameraIdle puts them back in one pass.
+    if (_selectedPinScreenPoint != null || _pinLabelPositions.isNotEmpty) {
+      setState(() {
+        _selectedPinScreenPoint = null;
+        _pinLabelPositions.clear();
+      });
     }
-    unawaited(_updatePinLabelPositions());
   }
 
   void _onCameraIdle() {
@@ -314,6 +338,12 @@ class _StormMapState extends State<StormMap> {
     _styleLoadTimer?.cancel();
     _styleLoadTimer = Timer(const Duration(seconds: 12), () {
       if (mounted && !_styleLoaded) {
+        if (_appliedStyleUrl == _darkStyleUrl && !_darkStyleFailed) {
+          _darkStyleFailed = true;
+          _appliedStyleUrl = _styleUrl;
+          unawaited(_reloadMapStyle());
+          return;
+        }
         setState(() => _mapUnavailable = true);
       }
     });
@@ -717,7 +747,8 @@ class _StormMapState extends State<StormMap> {
     if (mounted) setState(() => _mapUnavailable = false);
     _startStyleLoadTimer();
     try {
-      await controller.setStyle(_styleUrl);
+      _appliedStyleUrl = _activeStyleUrl;
+      await controller.setStyle(_appliedStyleUrl!);
       return true;
     } on PlatformException catch (error) {
       _showMessage(
@@ -761,7 +792,7 @@ class _StormMapState extends State<StormMap> {
         ColoredBox(
           color: context.nimbusPalette.mapWater,
           child: ml.MapLibreMap(
-            styleString: _styleUrl,
+            styleString: _appliedStyleUrl ??= _activeStyleUrl,
             initialCameraPosition: ml.CameraPosition(
               target: ml.LatLng(
                 widget.location.latitude,
@@ -786,7 +817,7 @@ class _StormMapState extends State<StormMap> {
             annotationOrder: const [ml.AnnotationType.circle],
             logoEnabled: true,
             scaleControlEnabled: true,
-            translucentTextureSurface: true,
+            translucentTextureSurface: false,
           ),
         ),
         if (_mapUnavailable)
@@ -1156,13 +1187,14 @@ class _StormMapState extends State<StormMap> {
     }
     _pinLabelUpdateInFlight = true;
     try {
-      final next = <String, Offset>{};
-      for (final pin in widget.mapPins) {
-        final point = await controller.toScreenLocation(
-          ml.LatLng(pin.latitude, pin.longitude),
-        );
-        next[_pinKey(pin)] = _toLogicalOffset(point);
-      }
+      final pins = widget.mapPins.toList();
+      final points = await controller.toScreenLocationBatch([
+        for (final pin in pins) ml.LatLng(pin.latitude, pin.longitude),
+      ]);
+      final next = <String, Offset>{
+        for (var i = 0; i < pins.length && i < points.length; i++)
+          _pinKey(pins[i]): _toLogicalOffset(points[i]),
+      };
       if (!mounted || !_showPinLabels) return;
       setState(() {
         _pinLabelPositions

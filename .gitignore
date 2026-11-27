@@ -7,3 +7,6 @@ SMS_SendAndRecieve/tunnel.log
 nimbus-v3/flutter_app/android/.gradle/
 nimbus-v3/flutter_app/packages/another_telephony/android/.gradle/
 nimbus-v3/flutter_app/packages/another_telephony/android/gradle/wrapper/chat.json
+Data/relay_limits.sqlite3
+Data/sms_*.json
+SMS_SendAndRecieve/tunnel.log

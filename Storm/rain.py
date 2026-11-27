@@ -42,3 +42,31 @@ def rain_level(lat, lon, hours=WINDOW_HOURS, timeout=10):
     if not values:
         raise RainError("Open-Meteo returned no precipitation values")
     return level_from_mm(max(values))
+
+def rain_levels(points, hours=WINDOW_HOURS, batch_size=100, timeout=30):
+    """Rain levels (0-4) for many (lat, lon) points, batching Open-Meteo
+    multi-location requests. Points whose batch fails get None."""
+    levels = []
+    for start in range(0, len(points), batch_size):
+        batch = points[start:start + batch_size]
+        params = urllib.parse.urlencode({
+            "latitude": ",".join(f"{lat:.5f}" for lat, _ in batch),
+            "longitude": ",".join(f"{lon:.5f}" for _, lon in batch),
+            "hourly": "precipitation",
+            "forecast_hours": hours,
+            "timezone": "Asia/Manila",
+        })
+        try:
+            with urllib.request.urlopen(f"{API}?{params}", timeout=timeout) as resp:
+                data = json.load(resp)
+        except (OSError, ValueError):
+            levels.extend([None] * len(batch))
+            continue
+        results = data if isinstance(data, list) else [data]
+        for index in range(len(batch)):
+            try:
+                values = [v for v in results[index]["hourly"]["precipitation"] if v is not None]
+                levels.append(level_from_mm(max(values)) if values else None)
+            except (IndexError, KeyError, TypeError):
+                levels.append(None)
+    return levels

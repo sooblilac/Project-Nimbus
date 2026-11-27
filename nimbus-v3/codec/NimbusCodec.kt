@@ -4,10 +4,14 @@
 //   NB1 <type> <town> <field> ... T<hhmm> [/<notice>] K<signature>
 //   NB1~P~<town>~<pin>...~T<hhmm>~K<signature> for multipart-safe pin snapshots
 //
-// The K signature is a demo checksum. A real gateway signs with HMAC-SHA256.
-// Check it against test_vectors.json before relying on it.
+// K is the first 4 bytes (8 hex digits) of HMAC-SHA256(key, body). Set the key
+// with NimbusCodec.signingKey before encoding or decoding; it must match the
+// relay's NIMBUS_SMS_SIGNING_KEY. test_vectors.json uses TEST_VECTOR_KEY.
 package nimbus
 
+import java.security.MessageDigest
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -15,11 +19,27 @@ object NimbusCodec {
     const val VERSION = "NB1"
     const val MAX_SMS = 160
 
-    /** h = h * 31 + UTF-16 char, kept to 32 bits; returns the low 16 bits as 4 hex digits. */
-    fun signature(text: String): String {
-        var h = 0L
-        for (ch in text) h = (h * 31 + ch.code) and 0xFFFFFFFFL
-        return "%04X".format(h and 0xFFFFL)
+    const val SIGNATURE_HEX = 8
+    const val TEST_VECTOR_KEY = "nimbus-test-vectors-key"
+
+    /** Shared secret; empty means nothing can be signed and nothing verifies. */
+    @Volatile var signingKey: String = ""
+
+    /** First 4 bytes of HMAC-SHA256(key, text) as 8 upper-case hex digits. */
+    fun signature(text: String, key: String = signingKey): String {
+        require(key.isNotEmpty()) { "NimbusCodec.signingKey is not set" }
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val bytes = mac.doFinal(text.toByteArray(Charsets.UTF_8))
+        return bytes.take(SIGNATURE_HEX / 2).joinToString("") { "%02X".format(it) }
+    }
+
+    private fun signatureValid(body: String, given: String): Boolean {
+        if (signingKey.isEmpty() || given.length != SIGNATURE_HEX) return false
+        return MessageDigest.isEqual(
+            signature(body).toByteArray(Charsets.US_ASCII),
+            given.uppercase().toByteArray(Charsets.US_ASCII),
+        )
     }
 
     /** Keeps a notice in the plain SMS character set so one reply stays one SMS. */
@@ -141,7 +161,7 @@ object NimbusCodec {
         if (!Regex("^T\\d{4}$").matches(timePart)) return null
         val base = Reply(
             parts[0], type, parts[2], timePart.substring(1),
-            if (n >= 0) body.substring(n + 2) else "", signature(body) == sms.substring(k + marker.length),
+            if (n >= 0) body.substring(n + 2) else "", signatureValid(body, sms.substring(k + marker.length)),
         )
         if (type == "Q") {
             val f = items.associate { it.substring(0, 1) to it.substring(1) }

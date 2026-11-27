@@ -3,11 +3,18 @@
     NB1 <type> <town> <field> ... T<hhmm> [/<notice>] K<signature>
     NB1~P~<town>~<pin>...~T<hhmm>~K<signature> for multipart-safe pin snapshots
 
-The K signature is a demo checksum. A real gateway signs with HMAC-SHA256.
-Run `python3 nimbus_codec.py` to check against test_vectors.json.
+K is the first 4 bytes (8 hex digits) of HMAC-SHA256(key, body), where body is
+everything before " K" / "~K". The key comes from NIMBUS_SMS_SIGNING_KEY (or
+set_signing_key). Encoding without a key raises; decoding without a key marks
+every reply invalid.
+Run `python3 nimbus_codec.py` to check against test_vectors.json (signed with
+TEST_VECTOR_KEY).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -16,12 +23,29 @@ VERSION = "NB1"
 MAX_SMS = 160
 
 
-def signature(text: str) -> str:
-    """h = h * 31 + char code, kept to 32 bits; returns the low 16 bits as 4 hex digits."""
-    h = 0
-    for ch in text:
-        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
-    return f"{h & 0xFFFF:04X}"
+SIGNATURE_HEX = 8
+TEST_VECTOR_KEY = "nimbus-test-vectors-key"  # public; only for test_vectors.json
+_signing_key: Optional[str] = os.environ.get("NIMBUS_SMS_SIGNING_KEY") or None
+
+
+def set_signing_key(key: Optional[str]) -> None:
+    global _signing_key
+    _signing_key = key or None
+
+
+def signature(text: str, key: Optional[str] = None) -> str:
+    """First 4 bytes of HMAC-SHA256(key, text) as 8 upper-case hex digits."""
+    key = key or _signing_key
+    if not key:
+        raise RuntimeError("NIMBUS_SMS_SIGNING_KEY is not set; cannot sign NIMBUS SMS.")
+    digest = hmac.new(key.encode("utf-8"), text.encode("utf-8"), hashlib.sha256).digest()
+    return digest[: SIGNATURE_HEX // 2].hex().upper()
+
+
+def _signature_valid(body: str, given: str) -> bool:
+    if not _signing_key or len(given) != SIGNATURE_HEX:
+        return False
+    return hmac.compare_digest(signature(body), given.upper())
 
 
 def clean_notice(text: str) -> str:
@@ -175,7 +199,7 @@ def decode(sms: str) -> Optional[Reply]:
     if not re.fullmatch(r"T\d{4}", time_part):
         return None
     reply = Reply(parts[0], type_, parts[2], time_part[1:], body[n + 2:] if n >= 0 else "",
-                  signature(body) == sms[k + len(marker):])
+                  _signature_valid(body, sms[k + len(marker):]))
     if type_ == "Q":
         f = {p[0]: p[1:] for p in items}
         e = re.match(r"^(\d+)([OFX]?)$", f.get("E", "0"))
@@ -200,6 +224,7 @@ if __name__ == "__main__":
     import json
     import pathlib
 
+    set_signing_key(TEST_VECTOR_KEY)
     vectors = json.loads((pathlib.Path(__file__).parent / "test_vectors.json").read_text())
     for v in vectors:
         if "tampered" in v:

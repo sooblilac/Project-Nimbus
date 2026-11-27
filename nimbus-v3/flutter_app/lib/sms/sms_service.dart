@@ -11,7 +11,7 @@ import '../codec/nimbus_codec.dart' as codec;
 
 const _defaultGatewayNumber = String.fromEnvironment(
   'NIMBUS_SMS_GATEWAY',
-  defaultValue: '09263180296',
+  defaultValue: '09938250146',
 );
 const _defaultApiUrl =
     'https://nimbus-worker.gozocharlyz.workers.dev/api';

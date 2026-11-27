@@ -14,13 +14,17 @@ PARSER = ROOT / "pagasa_parser"
 sys.path.insert(0, str(ROOT))
 
 from Storm.local_wind import WindModelError, local_impact
-from Storm.rain import RainError, rain_level
+from Storm.rain import rain_levels
 from Storm.pack_storm import PackError, pack_storm
+
+
+# Cloudflare rejects the default Python-urllib user agent with 403.
+USER_AGENT = "ProjectNimbus-Sync/1.0"
 
 
 def post_json(url: str, body: dict | None = None, token: str | None = None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if data is not None:
@@ -76,75 +80,130 @@ def bulletin_notice(bulletin: dict) -> str:
     return f"PAGASA {category} {name}. {headline}".strip()[:500]
 
 
+LOCATIONS = ROOT / "nimbus-v3" / "flutter_app" / "assets" / "data" / "philippine_locations.json"
+
+# Fields this script owns. Everything else in a town update (classes, notice,
+# flood areas, evacuation centers, roads, map pins) belongs to the LGU and is
+# carried over untouched, because the API replaces the whole update on POST.
+PAGASA_FIELDS = (
+    "signal",
+    "rain",
+    "gusts",
+    "pagasaActive",
+    "pagasaNotice",
+    "pagasaName",
+    "pagasaBulletin",
+    "issuedAt",
+)
+LGU_DEFAULTS = {
+    "classes": 0,
+    "notice": "",
+    "floodAreas": [],
+    "evacuationCenters": [],
+    "roadStatuses": [],
+    "mapPins": [],
+}
+
+
+def get_json(url: str):
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def town_list():
-    towns = json.loads((ROOT / "Data" / "towns.json").read_text(encoding="utf-8"))
-    demo = {
-        "0412": ("Batangas City", "0401005000"),
-        "0517": ("Naga City", "0501724000"),
-        "0837": ("Tacloban City", "0831600000"),
-        "1374": ("Marikina City", "1380700000"),
-    }
+    """Every city/municipality in the app's catalog, with the codes residents
+    use: the PSGC ID, plus the legacy four-digit ID where one exists."""
     output = []
-    for legacy, (name, psgc) in demo.items():
-        town = next((item for item in towns if item["name"] == name), None)
-        if town:
-            output.append((town, legacy, psgc))
+    for item in json.loads(LOCATIONS.read_text(encoding="utf-8")):
+        codes = [item["code"]]
+        if item.get("legacyCode"):
+            codes.append(item["legacyCode"])
+        output.append((item["latitude"], item["longitude"], codes))
     return output
 
 
+def pagasa_fields(bulletin: dict, active: bool, lat: float, lon: float, rain: int | None) -> dict:
+    if not active:
+        return {
+            "signal": 0,
+            "rain": 0,
+            "gusts": 0,
+            "pagasaActive": False,
+            "pagasaNotice": "No current storm update administered by PAGASA.",
+            "pagasaName": "",
+            "pagasaBulletin": "",
+            "issuedAt": "",
+        }
+    try:
+        impact = local_impact(bulletin, lat, lon)
+        signal = int(impact.signal)
+        gusts = int(impact.gusts_kph)
+    except WindModelError:
+        signal = 0
+        gusts = int((bulletin.get("intensity") or {}).get("gustsKph") or 0)
+    return {
+        "signal": signal,
+        "rain": rain or 0,
+        "gusts": gusts,
+        "pagasaActive": True,
+        "pagasaNotice": bulletin_notice(bulletin),
+        "pagasaName": str(bulletin.get("name") or ""),
+        "pagasaBulletin": str(bulletin.get("bulletinNumber") or ""),
+        "issuedAt": str(bulletin.get("issued") or ""),
+    }
+
+
 def main() -> None:
-    api_url = os.getenv("NIMBUS_API_URL", "http://127.0.0.1:8080/api").rstrip("/")
+    api_url = os.getenv(
+        "NIMBUS_API_URL", "https://nimbus-worker.gozocharlyz.workers.dev/api"
+    ).rstrip("/")
     bulletin = fetch_live_bulletin()
     active = bulletin_is_active(bulletin)
-    token = login(api_url)
-    published = 0
+    towns = town_list()
 
-    for town, legacy_code, psgc_code in town_list():
-        if not active:
-            body = {
-                "classes": 0,
-                "notice": "No current storm update administered by PAGASA.",
-                "floodAreas": [],
-                "evacuationCenters": [],
-                "roadStatuses": [],
-                "mapPins": [],
-                "rain": 0,
-                "gusts": 0,
-                "pagasaActive": False,
-            }
-        else:
+    # One request for every town's current update, so LGU data can be kept.
+    current = {
+        row["townCode"]: row.get("update") or {}
+        for row in get_json(f"{api_url}/towns").get("towns", [])
+    }
+
+    # Rain only matters during an active storm; batch it to spare Open-Meteo.
+    rains = rain_levels([(lat, lon) for lat, lon, _ in towns]) if active else [0] * len(towns)
+
+    token = None
+    published = skipped = failed = 0
+    for (lat, lon, codes), rain in zip(towns, rains):
+        fields = pagasa_fields(bulletin, active, lat, lon, rain)
+        for code in codes:
+            existing = current.get(code, {})
+            if all(existing.get(key) == value for key, value in fields.items()):
+                skipped += 1
+                continue
+            body = {key: existing.get(key, default) for key, default in LGU_DEFAULTS.items()}
+            body.update(
+                {
+                    key: value
+                    for key, value in existing.items()
+                    if key not in ("townCode", "updatedAt")
+                }
+            )
+            body.update(fields)
+            if token is None:
+                token = login(api_url)
             try:
-                impact = local_impact(bulletin, town["lat"], town["lon"])
-                warning = str(impact.signal)
-                gusts = impact.gusts_kph
-            except WindModelError:
-                warning = "0"
-                gusts = int((bulletin.get("intensity") or {}).get("gustsKph") or 0)
-            try:
-                rain = rain_level(town["lat"], town["lon"])
-            except RainError:
-                rain = 0
+                post_json(f"{api_url}/towns/{code}/updates", body, token)
+                published += 1
+            except OSError as error:
+                failed += 1
+                print(f"Could not publish {code}: {error}", file=sys.stderr)
 
-            body = {
-                "classes": int(warning),
-                "notice": bulletin_notice(bulletin),
-                "floodAreas": [],
-                "evacuationCenters": [],
-                "roadStatuses": [],
-                "mapPins": [],
-                "rain": rain,
-                "gusts": gusts,
-                "pagasaActive": True,
-                "pagasaName": str(bulletin.get("name") or ""),
-                "pagasaBulletin": str(bulletin.get("bulletinNumber") or ""),
-                "issuedAt": str(bulletin.get("issued") or ""),
-            }
-
-        for api_code in (legacy_code, psgc_code):
-            post_json(f"{api_url}/towns/{api_code}/updates", body, token)
-            published += 1
-
-    print(f"PAGASA sync: active={active}, published={published}")
+    print(
+        f"PAGASA sync: active={active}, towns={len(towns)}, "
+        f"published={published}, unchanged={skipped}, failed={failed}"
+    )
 
 
 if __name__ == "__main__":

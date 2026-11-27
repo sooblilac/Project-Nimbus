@@ -2,124 +2,100 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NIMBUS LGU Dashboard</title>
-  <style>
-    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;color:#10213f;background:#edf3fb}*{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}button{cursor:pointer}.shell{min-height:100vh}.topbar{height:72px;background:#fff;border-bottom:1px solid #dbe5f3;display:flex;align-items:center;justify-content:space-between;padding:0 28px}.brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:20px}.brand b{width:38px;height:38px;border-radius:12px;background:#2f6fe4;color:#fff;display:grid;place-items:center}.account{display:flex;align-items:center;gap:10px}.pill{border:1px solid #dbe5f3;background:#f7faff;border-radius:999px;padding:8px 12px}.btn{border:0;border-radius:10px;padding:11px 16px;background:#2f6fe4;color:#fff;font-weight:750}.btn.secondary{background:#edf3fb;color:#28548f}.btn.danger{background:#d23f5e}.layout{max-width:1180px;margin:auto;padding:28px}.grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px}.card{background:#fff;border:1px solid #dbe5f3;border-radius:18px;padding:20px}.towns{display:grid;gap:8px;margin-top:14px}.town{border:1px solid #dbe5f3;border-radius:10px;background:#fff;padding:12px;text-align:left}.town.active{border-color:#2f6fe4;background:#eaf1fd;color:#1d4da3}.field{display:grid;gap:7px;margin-bottom:14px}.field label{font-size:13px;font-weight:750}.field input,.field select,.field textarea{width:100%;border:1px solid #ccd9ec;border-radius:10px;padding:11px;background:#fff}.field textarea{min-height:90px;resize:vertical}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.notice{padding:12px;border-radius:10px;background:#edf3fb;margin-bottom:16px}.notice.error{background:#fff0f3;color:#a51e43}.hidden{display:none!important}.login{min-height:100vh;display:grid;place-items:center;padding:20px}.login-card{width:min(420px,100%);background:#fff;border:1px solid #dbe5f3;border-radius:20px;padding:28px}.login-card h1{margin:0 0 6px}.login-card p{color:#667793;margin:0 0 24px}.statusline{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}.toggle{display:flex;align-items:center;gap:10px}.actions{display:flex;justify-content:flex-end;gap:10px}.section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.entries{display:grid;gap:8px}.entry{display:grid;grid-template-columns:minmax(0,1fr) 120px 120px auto;gap:8px}.entry input,.entry select{min-width:0}.remove{border:0;background:#fff0f3;color:#a51e43;border-radius:8px}.map-editor{height:360px;border:1px solid #ccd9ec;border-radius:14px;overflow:hidden;margin-bottom:12px}.pin-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}.pin-grid input,.pin-grid select{min-width:0;width:100%;border:1px solid #ccd9ec;border-radius:9px;padding:9px}.pin-list{display:grid;gap:8px}.pin-row{display:grid;grid-template-columns:minmax(0,1fr) 110px 110px 82px auto;gap:8px;align-items:center}.pin-row small{color:#667793}@media(max-width:760px){.topbar{padding:0 16px}.account .pill{display:none}.layout{padding:16px}.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.entry{grid-template-columns:1fr}.entry button{min-height:38px}.pin-grid{grid-template-columns:1fr}.pin-row{grid-template-columns:1fr}}
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>NIMBUS LGU</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <script src="/dashboard.js" defer></script>
 </head>
 <body>
-<div id="login" class="login">
-  <form id="loginForm" class="login-card">
-    <h1>NIMBUS LGU</h1><p>Sign in to publish verified town announcements.</p>
-    <div id="loginError" class="notice error hidden"></div>
-    <div class="field"><label for="username">Username</label><input id="username" autocomplete="username" required></div>
-    <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>
-    <button class="btn" style="width:100%" type="submit">Sign in</button>
+<!-- Line icons. Shapes carry meaning without color: circle-! error, octagon block,
+     triangle warning, circle-check ok, circle-dash no details. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-waves" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/><path d="M2 13c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/><path d="M2 19c2.5 0 2.5-2 5-2s2.5 2 5 2 2.5-2 5-2 2.5 2 5 2"/></g></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/></g></symbol>
+    <symbol id="i-home-full" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/></g><path d="M8 12.5h8V19H8z" fill="currentColor"/></symbol>
+    <symbol id="i-road" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3 4 21"/><path d="M16 3l4 18"/><path d="M12 4v3M12 10.5v3M12 17v3"/></g></symbol>
+    <symbol id="i-school" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5 12 4.5l10 5-10 5z"/><path d="M6 11.5v4.5c0 1.6 2.7 3 6 3s6-1.4 6-3v-4.5"/><path d="M22 9.5v5"/></g></symbol>
+    <symbol id="i-campaign" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4h3.5L13 18.5v-13L6.5 10z"/><path d="M17 9a4 4 0 0 1 0 6"/><path d="M19.5 6.5a7.5 7.5 0 0 1 0 11"/></g></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M7 19h10.5a4.5 4.5 0 0 0 .6-8.96A6.5 6.5 0 0 0 5.6 9.3 4.9 4.9 0 0 0 7 19z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21.5s-7-6.3-7-12a7 7 0 0 1 14 0c0 5.7-7 12-7 12z"/><circle cx="12" cy="9.5" r="2.5"/></g></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.7 2.7L16.2 9.5"/></g></symbol>
+    <symbol id="i-error" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/></g><circle cx="12" cy="16.5" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-block" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.3 3h7.4L21 8.3v7.4L15.7 21H8.3L3 15.7V8.3z"/><path d="M8 12h8"/></g></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5"/></g><circle cx="12" cy="17.2" r="1.1" fill="currentColor"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></g></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.2 2"/></g></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></g></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="18.5" cy="12" r="1.8" fill="currentColor"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.8-4.8"/></g></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20 21 12 4 4l2.2 8z"/><path d="M6.2 12H13"/></g></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></g></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/></g><circle cx="12" cy="7.8" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-signal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M5 20v-3.5M10 20v-7.5M15 20V9M20 20V5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 20h14"/></g></symbol>
+  </defs>
+</svg>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- Sign-in -->
+<div id="login-view" class="login" hidden>
+  <div class="login-sky" aria-hidden="true"></div>
+  <form id="login-form" class="login-card" novalidate>
+    <div class="login-brand">
+      <span class="brand-mark"><svg class="i" aria-hidden="true"><use href="#i-cloud"/></svg></span>
+      <span class="brand-name">NIMBUS</span><span class="pill-lgu">LGU</span>
+    </div>
+    <h1>Sign in to publish town updates</h1>
+    <p class="sub">What you publish reaches residents in the NIMBUS app and by SMS.</p>
+    <div id="login-note" class="banner warning" hidden><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg><p></p></div>
+    <div id="login-error" class="banner danger" role="alert" hidden><svg class="i" aria-hidden="true"><use href="#i-error"/></svg><p></p></div>
+    <div class="field">
+      <label class="label" for="lg-user">Username</label>
+      <input id="lg-user" class="input input-lg" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    </div>
+    <div class="field">
+      <label class="label" for="lg-pass">Password</label>
+      <div class="pass-wrap">
+        <input id="lg-pass" class="input input-lg" type="password" autocomplete="current-password" required>
+        <button id="lg-show" class="btn btn-tertiary btn-sm" type="button" aria-pressed="false" aria-controls="lg-pass">Show</button>
+      </div>
+      <p id="lg-caps" class="hint-inline warning-ink" hidden><svg class="i i-sm" aria-hidden="true"><use href="#i-warn"/></svg>Caps Lock is on</p>
+    </div>
+    <label class="check"><input id="lg-keep" type="checkbox"> Keep me signed in on this device</label>
+    <button id="lg-submit" class="btn btn-primary btn-block" type="submit">Sign in</button>
+    <p class="foot-note">Accounts are issued by the NIMBUS administrator. Don't share passwords.</p>
   </form>
 </div>
-<div id="app" class="shell hidden">
-  <header class="topbar"><div class="brand"><b>N</b>NIMBUS LGU</div><div class="account"><span id="accountName" class="pill"></span><button id="logout" class="btn secondary">Sign out</button></div></header>
-  <main class="layout"><div id="message" class="notice hidden"></div><div class="grid"><aside class="card"><h3>Assigned towns</h3><div id="towns" class="towns"></div></aside>
-  <section class="card"><div class="statusline"><div><h2 id="townTitle">Town update</h2><small id="savedTime"></small></div></div>
-    <div class="row"><div class="field"><label>Class status</label><select id="classes"><option value="0">0 — No suspension</option><option value="1">1 — All levels</option><option value="2">2 — Preschool to SHS</option><option value="3">3 — Preschool to grade 10</option><option value="4">4 — Preschool to grade 6</option><option value="5">5 — Preschool only</option></select></div><div class="field"><label>Public notice</label><textarea id="notice"></textarea></div></div>
-    <div class="field"><div class="section-head"><label>Flood areas</label><button class="btn secondary" type="button" id="addFlood">+ Add</button></div><div id="floods" class="entries"></div></div>
-    <div class="field"><div class="section-head"><label>Evacuation centers</label><button class="btn secondary" type="button" id="addEvac">+ Add</button></div><div id="evacs" class="entries"></div></div>
-    <div class="field"><div class="section-head"><label>Road statuses</label><button class="btn secondary" type="button" id="addRoad">+ Add</button></div><div id="roads" class="entries"></div></div>
-    <div class="field"><div class="section-head"><label>Map pins</label><small>Click the map to choose a location</small></div><div id="pinMap" class="map-editor"></div><div class="pin-grid"><select id="pinCategory"><option value="flood">Flood</option><option value="evacuation">Evacuation center</option><option value="road">Road</option></select><input id="pinLabel" placeholder="Pin label"><input id="pinLat" type="number" step="any" placeholder="Latitude"><input id="pinLng" type="number" step="any" placeholder="Longitude"><select id="pinStatus"><option value="C">Clear / No flooding</option><option value="F">Flooding / Open</option><option value="W">On watch</option><option value="L">Limited</option><option value="O">Open</option><option value="X">Closed</option></select></div><div class="field" style="margin-top:8px"><label for="pinIntensity">Intensity: <span id="pinIntensityLabel">50</span>%</label><input id="pinIntensity" type="range" min="0" max="100" value="50"></div><button id="addPin" class="btn secondary" type="button">Add pin and speech bubble</button><div id="pinList" class="pin-list" style="margin-top:10px"></div></div>
-    <div class="actions"><button id="delete" class="btn danger">Clear update</button><button id="publish" class="btn">Publish to NIMBUS</button></div>
-  </section></div></main>
+
+<!-- App shell -->
+<div id="app" class="app" hidden>
+  <header id="topbar" class="topbar"></header>
+  <nav id="rail" class="rail" aria-label="Sections" hidden></nav>
+  <main id="main" class="main" tabindex="-1">
+    <div id="banners" class="banners"></div>
+    <div id="view" class="view"></div>
+  </main>
+  <aside id="preview-rail" class="preview-rail" aria-label="What residents see" hidden></aside>
+  <div id="publish-bar" class="publish-bar" hidden></div>
 </div>
-<!-- Legacy inline dashboard script:
-<script>
-  const API='https://nimbus-worker.gozocharlyz.workers.dev/api';
-  let session=null,towns=[],selected=null;
-  const $=id=>document.getElementById(id);
-  function notice(text,error=false){const el=$('message');el.textContent=text;el.className='notice'+(error?' error':'');el.classList.remove('hidden');setTimeout(()=>el.classList.add('hidden'),5000)}
-  function tokenHeaders(){return { 'Content-Type':'application/json','Authorization':'Bearer '+session.accessToken }}
-  $('loginForm').addEventListener('submit', async event => {
-    event.preventDefault();
-    $('loginError').classList.add('hidden');
-    try {
-      const response = await fetch(API+'/auth/login', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})
-      });
-      const data=await response.json();
-      if(!response.ok) throw new Error(data.error||'Sign-in failed.');
-      session=data; towns=data.townCodes;
-      $('login').classList.add('hidden'); $('app').classList.remove('hidden');
-      $('accountName').textContent=data.username;
-      renderTowns();
-    } catch(error){ $('loginError').textContent=error.message; $('loginError').classList.remove('hidden'); }
-  });
 
-  function renderTowns(){
-    $('towns').replaceChildren();
-    for(const code of towns){
-      const button=document.createElement('button'); button.className='town'; button.textContent=code==='*'?'All towns':code;
-      button.onclick=()=>selectTown(code); $('towns').append(button);
-    }
-    if(towns.length && towns[0]!=='*') selectTown(towns[0]);
-  }
+<div id="toasts" class="toast-region" aria-live="polite"></div>
 
-  async function selectTown(code){
-    if(code==='*') return notice('Select a specific town account to publish an update.',true);
-    selected=code;
-    [...document.querySelectorAll('.town')].forEach((b,i)=>b.classList.toggle('active',b.textContent===code));
-    $('townTitle').textContent='Town '+code; clearForm();
-    try{
-      const response=await fetch(API+'/towns/'+encodeURIComponent(code)+'/updates');
-      const data=await response.json();
-      if(data.update) loadUpdate(data.update); 
-      if(data.updatedAt) $('savedTime').textContent='Last saved '+new Date(data.updatedAt).toLocaleString();
-    }catch(error){ notice(error.message,true); }
-  }
-
-  function clearForm(){
-    $('classes').value='0'; $('notice').value=''; $('floods').replaceChildren(); $('evacs').replaceChildren(); $('roads').replaceChildren(); $('mapPins').replaceChildren(); $('savedTime').textContent='';
-  }
-  function loadUpdate(update){
-    $('classes').value=String(update.classes??0); $('notice').value=update.notice||'';
-    for(const f of update.floodAreas||[]) addFlood(f.name,f.level,f.status);
-    for(const e of update.evacuationCenters||[]) addEvac(e.name,e.status,e.percentFull);
-    for(const r of update.roadStatuses||[]) addRoad(r.name,r.status);
-    for(const p of update.mapPins||[]) addPin(p.name,p.lat,p.lng);
-  }
-  function addRow(container, fields){
-    const row=document.createElement('div'); row.className='entry';
-    for(const field of fields){
-      const el=document.createElement(field.tag||'input'); el.type=field.type||'text'; el.placeholder=field.placeholder||''; el.value=field.value||'';
-      if(field.tag==='select'){for(const option of field.options||[])el.add(new Option(option.label,option.value));el.value=field.value||field.options?.[0]?.value||''}
-      row.append(el);
-    }
-    const remove=document.createElement('button'); remove.type='button';remove.className='remove';remove.textContent='Remove';remove.onclick=()=>row.remove();row.append(remove);container.append(row);
-  }
-  function addFlood(name='',level='M',status='C'){addRow($('floods'),[{placeholder:'Area name',value:name},{tag:'select',value:level,options:[{value:'H',label:'High'},{value:'M',label:'Medium'},{value:'L',label:'Low'}]},{tag:'select',value:status,options:[{value:'F',label:'Flooding'},{value:'W',label:'On watch'},{value:'C',label:'Clear'}]}])}
-  function addEvac(name='',status='O',percent=0){addRow($('evacs'),[{placeholder:'Center name',value:name},{tag:'select',value:status,options:[{value:'O',label:'Open'},{value:'F',label:'Full'},{value:'X',label:'Closed'}]},{placeholder:'Percent full',type:'number',value:String(percent)}])}
-  function addRoad(name='',status='O'){addRow($('roads'),[{placeholder:'Road name',value:name},{tag:'select',value:status,options:[{value:'O',label:'Open'},{value:'L',label:'Limited'},{value:'X',label:'Closed'}]}])}
-  function addPin(name='',lat='',lng=''){addRow($('mapPins'),[{placeholder:'Pin name',value:name},{placeholder:'Latitude',value:lat},{placeholder:'Longitude',value:lng}])}
-  $('addFlood').onclick=()=>addFlood(); $('addEvac').onclick=()=>addEvac(); $('addRoad').onclick=()=>addRoad(); $('addPin').onclick=()=>addPin();
-
-  function collect(container, fields){
-    return [...container.children].map(row=>{const inputs=[...row.querySelectorAll('input,select')];return Object.fromEntries(fields.map((key,i)=>[key, inputs[i]?.tagName==='SELECT'?inputs[i].value:(inputs[i]?.type==='number'?Number(inputs[i].value):inputs[i].value.trim())])).filter&&Object.fromEntries(fields.map((key,i)=>[key,inputs[i]?.tagName==='SELECT'?inputs[i].value:(inputs[i]?.type==='number'?Number(inputs[i].value):inputs[i].value.trim())]))}).filter(item=>Object.values(item).every(v=>v!==''));
-  }
-  function collectEvacs(){return [...$('evacs').children].map(row=>{const i=row.querySelectorAll('input,select');return{name:i[0].value.trim(),status:i[1].value,percentFull:Number(i[2].value)}}).filter(x=>x.name)}
-  function collectRoads(){return [...$('roads').children].map(row=>{const i=row.querySelectorAll('input,select');return{name:i[0].value.trim(),status:i[1].value}}).filter(x=>x.name)}
-  function collectFloods(){return [...$('floods').children].map(row=>{const i=row.querySelectorAll('input,select');return{name:i[0].value.trim(),level:i[1].value,status:i[2].value}}).filter(x=>x.name)}
-  function collectPins(){return [...$('mapPins').children].map(row=>{const i=row.querySelectorAll('input,select');return{name:i[0].value.trim(),lat:Number(i[1].value),lng:Number(i[2].value)}}).filter(x=>x.name)}
-
-  $('publish').onclick=async()=>{
-    if(!selected) return notice('Select a town first.',true);
-    const body={classes:Number($('classes').value),notice:$('notice').value,floodAreas:collectFloods(),evacuationCenters:collectEvacs(),roadStatuses:collectRoads(),mapPins:collectPins()};
-    try{const r=await fetch(API+'/towns/'+encodeURIComponent(selected)+'/updates',{method:'POST',headers:tokenHeaders(),body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw new Error(d.error||'Publish failed.');$('savedTime').textContent='Published '+new Date(d.update.updatedAt).toLocaleString();notice('Town update published to NIMBUS.')}catch(e){notice(e.message,true)}
-  };
-  $('delete').onclick=async()=>{if(!selected||!confirm('Clear the published update for town '+selected+'?'))return;try{const r=await fetch(API+'/towns/'+encodeURIComponent(selected)+'/updates',{method:'DELETE',headers:tokenHeaders()});const d=await r.json();if(!r.ok)throw new Error(d.error||'Clear failed.');clearForm();notice('Published town update cleared.') }catch(e){notice(e.message,true)}};
-  $('logout').onclick=async()=>{if(session)await fetch(API+'/auth/logout',{method:'POST',headers:tokenHeaders()}).catch(()=>{});session=null;location.reload()};
-</script>
---> 
-<script src="/dashboard.js"></script>
+<dialog id="review"></dialog>
+<dialog id="confirm"></dialog>
+<dialog id="conflict"></dialog>
+<dialog id="reauth"></dialog>
+<dialog id="leave"></dialog>
+<dialog id="delete"></dialog>
+<dialog id="history"></dialog>
+<dialog id="preview-sheet"></dialog>
 </body>
 </html>

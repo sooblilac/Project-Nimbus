@@ -131,7 +131,16 @@ use HTTPS for a deployed API.
 
 - The in-app gateway handles only map-pin snapshots (`P`) and `ASK P`; other update types still need a gateway handler.
 - Verify multipart SMS delivery with the target carriers and SIM devices before deployment.
-- The `K` signature is a demo checksum, not authentication. The gateway also checks the configured LGU sender number; use HMAC-SHA256 before any real pilot.
+- The `K` signature is the first 8 hex digits of HMAC-SHA256 with a shared key
+  (`NIMBUS_SMS_SIGNING_KEY`). The relay refuses to start without it; build the app with
+  `--dart-define=NIMBUS_SMS_SIGNING_KEY=<same key>`. Builds without the key use a public
+  development key, so real relay replies show as not verified. The key ships inside the
+  APK, so treat it as tamper-evidence, not secrecy: the app also only accepts replies from
+  the configured relay number. `codec/test_vectors.json` is signed with the public
+  `nimbus-test-vectors-key`.
+- The relay accepts only sms-gate.app webhooks signed with `SMS_WEBHOOK_SIGNING_KEY`
+  (Settings > Webhooks > Signing Key on the gateway phone), listens on 127.0.0.1 only,
+  and caps replies per number and overall (see `.env.example`).
 - Open-Meteo weather is a general forecast/current-conditions fallback and is not an official warning.
 
 Bundled demo snapshots are available for Batangas City, Naga City, Tacloban City,

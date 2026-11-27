@@ -3,19 +3,57 @@
 //   NB1 <type> <town> <field> ... T<hhmm> [/<notice>] K<signature>
 //   NB1~P~<town>~<pin>...~T<hhmm>~K<signature> (multipart-safe pin snapshot)
 //
-// The K signature is a demo checksum. A real gateway signs with HMAC-SHA256.
-// Check it against test_vectors.json before relying on it.
+// K is the first 4 bytes (8 hex digits) of HMAC-SHA256(key, body), where body
+// is everything before " K" / "~K". The key is set at build time with
+// --dart-define=NIMBUS_SMS_SIGNING_KEY=... and must match the relay's key.
+// Builds without it use a public development key, so real relay replies show
+// as not verified. test_vectors.json is signed with [testVectorKey].
+
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 
 const String nbVersion = 'NB1';
 const int maxSms = 160;
 
-/// h = h * 31 + UTF-16 code unit, kept to 32 bits; returns the low 16 bits as 4 hex digits.
-String signature(String text) {
-  var h = 0;
-  for (final unit in text.codeUnits) {
-    h = (h * 31 + unit) & 0xFFFFFFFF;
+const int signatureHexLength = 8;
+
+/// Public key used only for codec/test_vectors.json.
+const String testVectorKey = 'nimbus-test-vectors-key';
+
+/// Public key for development builds. Never use it on a real relay.
+const String devSigningKey = 'nimbus-dev-key-not-for-production';
+
+String _signingKey = const String.fromEnvironment(
+  'NIMBUS_SMS_SIGNING_KEY',
+  defaultValue: devSigningKey,
+);
+
+/// True when this build was given a real signing key.
+bool get hasProductionSigningKey => _signingKey != devSigningKey;
+
+/// Overrides the signing key (tests and gateway setup).
+void setSigningKey(String key) => _signingKey = key;
+
+/// First 4 bytes of HMAC-SHA256(key, text) as 8 upper-case hex digits.
+String signature(String text, {String? key}) {
+  final mac = Hmac(sha256, utf8.encode(key ?? _signingKey));
+  final bytes = mac.convert(utf8.encode(text)).bytes.sublist(0, signatureHexLength ~/ 2);
+  return bytes
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join()
+      .toUpperCase();
+}
+
+bool _signatureValid(String body, String given) {
+  if (given.length != signatureHexLength) return false;
+  final expected = signature(body);
+  var diff = 0;
+  final upper = given.toUpperCase();
+  for (var i = 0; i < signatureHexLength; i++) {
+    diff |= expected.codeUnitAt(i) ^ upper.codeUnitAt(i);
   }
-  return (h & 0xFFFF).toRadixString(16).toUpperCase().padLeft(4, '0');
+  return diff == 0;
 }
 
 /// Keeps a notice in the plain SMS character set so one reply stays one SMS.
@@ -155,7 +193,7 @@ class Reply {
 }
 
 final _flood = RegExp(r'^A(\d+)([HML])([FWC])(?::(\S+))?$');
-final _evac = RegExp(r'^S(\d+)([OFX])(\d+)$');
+final _evac = RegExp(r'^S(\d+)([OFX])(\d+)(?::(\S+))?$');
 final _road = RegExp(r'^R(\d+)([OLX])(?::(\S+))?$');
 final _pin = RegExp(
   r"^([FER])\|([A-Z])\|(\d{1,3})\|(-?\d{1,8})\|(-?\d{1,9})\|([A-Za-z0-9_.'-]+)$",
@@ -209,6 +247,7 @@ Item? _parseField(String type, String part) {
       int.parse(m!.group(1)!),
       status: m.group(2),
       percentFull: int.parse(m.group(3)!),
+      customName: m.group(4)?.replaceAll('_', ' '),
     );
   }
   if (type == 'R' && (m = _road.firstMatch(part)) != null) {
@@ -254,7 +293,7 @@ Reply? decode(String sms) {
     parts[2],
     timePart.substring(1),
     n >= 0 ? body.substring(n + 2) : '',
-    signature(body) == sms.substring(k + marker.length),
+    _signatureValid(body, sms.substring(k + marker.length)),
   );
   if (type == 'Q') {
     final f = {for (final p in items) p[0]: p.substring(1)};

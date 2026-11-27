@@ -1,3 +1,4 @@
+import { smsWebhook } from "./sms_relay.js";
 /**
  * Welcome to Cloudflare Workers! This is your first worker.
  *
@@ -69,7 +70,7 @@ async function pbkdf2(password, saltHex, iterations = 100_000) {
 }
 
 export default {
-	async fetch(request, env) {
+	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 		const path = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -86,6 +87,8 @@ export default {
 		}
 
 		if (!env.nimbus_db) return json({ error: "D1 binding nimbus_db is not configured." }, 503);
+
+		if (path === "/sms" && request.method === "POST") return smsWebhook(request, env, ctx);
 
 		if (path === "/api/pagasa" && request.method === "GET") {
 			const row = await env.nimbus_db.prepare(

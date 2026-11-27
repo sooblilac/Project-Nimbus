@@ -90,7 +90,7 @@ def start_tunnel():
     """Start cloudflared and return (process, public_url)."""
     log = open(TUNNEL_LOG, "w", encoding="utf-8")
     proc = subprocess.Popen(
-        ["cloudflared", "tunnel", "--url", "http://localhost:5001"],
+        ["cloudflared", "tunnel", "--url", "http://127.0.0.1:5001"],
         stdout=log,
         stderr=subprocess.STDOUT,
     )

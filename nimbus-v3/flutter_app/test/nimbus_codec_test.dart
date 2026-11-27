@@ -52,7 +52,7 @@ void main() {
     ], '0800');
     expect(decode(valid)?.valid, isTrue);
     expect(
-      decode(valid.replaceFirst(RegExp(r'K[0-9A-F]{4}$'), 'K0000'))?.valid,
+      decode(valid.replaceFirst(RegExp(r'K[0-9A-F]{8}$'), 'K00000000'))?.valid,
       isFalse,
     );
 
