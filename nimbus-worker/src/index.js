@@ -1,4 +1,4 @@
-import { smsWebhook } from "./sms_relay.js";
+import { alertSubscribers, smsWebhook } from "./sms_relay.js";
 /**
  * Welcome to Cloudflare Workers! This is your first worker.
  *
@@ -90,6 +90,59 @@ export default {
 
 		if (path === "/sms" && request.method === "POST") return smsWebhook(request, env, ctx);
 
+		// Storm drill: a replayed PAGASA bulletin kept apart from live data (see nimbus_sync.py --drill).
+		const pageMatch = /^\/api\/drill\/pages\/(\d{1,2})$/.exec(path);
+		if (pageMatch) {
+			await env.nimbus_db.prepare("CREATE TABLE IF NOT EXISTS drill_pages (n INTEGER PRIMARY KEY, img BLOB)").run();
+			const n = Number(pageMatch[1]);
+			if (request.method === "GET") {
+				const row = await env.nimbus_db.prepare("SELECT img FROM drill_pages WHERE n = ?").bind(n).first();
+				if (!row) return json({ error: "No such page." }, 404);
+				return new Response(new Uint8Array(row.img), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=300", ...CORS_HEADERS } });
+			}
+			if (request.method === "POST") {
+				const auth = await session(env, request);
+				if (!auth) return json({ error: "Unauthorized." }, 401);
+				if (!await authorizedForTown(env, auth.username, "*")) return json({ error: "Only all-towns accounts can run drills." }, 403);
+				const img = await request.arrayBuffer();
+				if (!img.byteLength || img.byteLength > 1_500_000) return json({ error: "Page image must be 1-1500 KB." }, 413);
+				await env.nimbus_db.prepare("INSERT INTO drill_pages (n, img) VALUES (?, ?) ON CONFLICT(n) DO UPDATE SET img = excluded.img").bind(n, img).run();
+				return json({ ok: true, page: n });
+			}
+		}
+		if (path === "/api/drill") {
+			await env.nimbus_db.prepare("CREATE TABLE IF NOT EXISTS drill_state (id INTEGER PRIMARY KEY, state_json TEXT, updated_at TEXT)").run();
+			await env.nimbus_db.prepare("CREATE TABLE IF NOT EXISTS drill_pages (n INTEGER PRIMARY KEY, img BLOB)").run();
+			if (request.method === "GET") {
+				const row = await env.nimbus_db.prepare("SELECT state_json, updated_at FROM drill_state WHERE id = 1").first();
+				if (!row) return json({ active: false });
+				const st = JSON.parse(row.state_json);
+				const bySignal = {};
+				for (const f of Object.values(st.towns || {})) bySignal[f.signal] = (bySignal[f.signal] || 0) + 1;
+				const pages = (await env.nimbus_db.prepare("SELECT COUNT(*) AS c FROM drill_pages").first()).c;
+				return json({ active: true, title: st.title, issued: st.issued, source: st.source, headline: st.headline, townsBySignal: bySignal, pages, startedAt: row.updated_at });
+			}
+			const auth = await session(env, request);
+			if (!auth) return json({ error: "Unauthorized." }, 401);
+			if (!await authorizedForTown(env, auth.username, "*")) return json({ error: "Only all-towns accounts can run drills." }, 403);
+			if (request.method === "DELETE") {
+				await env.nimbus_db.batch([env.nimbus_db.prepare("DELETE FROM drill_state WHERE id = 1"), env.nimbus_db.prepare("DELETE FROM drill_pages")]);
+				return json({ ok: true, active: false });
+			}
+			if (request.method === "POST") {
+				const body = await readJson(request);
+				if (!body || typeof body.title !== "string" || typeof body.towns !== "object" || typeof body.default !== "object") {
+					return json({ error: "Drill needs title, default and towns." }, 400);
+				}
+				await env.nimbus_db.batch([
+					env.nimbus_db.prepare("DELETE FROM drill_pages"), // new bulletin, new pages
+					env.nimbus_db.prepare("INSERT INTO drill_state (id, state_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at")
+						.bind(JSON.stringify(body), new Date().toISOString()),
+				]);
+				return json({ ok: true, active: true });
+			}
+		}
+
 		if (path === "/api/pagasa" && request.method === "GET") {
 			const row = await env.nimbus_db.prepare(
 				"SELECT state_json, updated_at FROM pagasa_state WHERE id = 1",
@@ -136,11 +189,19 @@ export default {
 				if (!await authorizedForTown(env, auth.username, townCode)) return json({ error: "Forbidden for this town." }, 403);
 				const body = await readJson(request);
 				if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Request body must be an update object." }, 400);
-				const update = { ...body, townCode, updatedAt: new Date().toISOString() };
+				// "alertSubscribers" is a publish option from the dashboard, not part of the update.
+				const { alertSubscribers: lguAlert, ...fields } = body;
+				const before = await env.nimbus_db.prepare("SELECT update_json FROM towns WHERE town_code = ?").bind(townCode).first();
+				const oldSignal = before ? Number(JSON.parse(before.update_json).signal) || 0 : 0;
+				const update = { ...fields, townCode, updatedAt: new Date().toISOString() };
 				await env.nimbus_db.prepare(
 					"INSERT INTO towns (town_code, update_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(town_code) DO UPDATE SET update_json = excluded.update_json, updated_at = excluded.updated_at",
 				).bind(townCode, JSON.stringify(update), update.updatedAt).run();
-				return json({ update });
+				// Automatic SMS alerts: PAGASA signal went up, or the LGU asked to notify.
+				const newSignal = Number(update.signal) || 0;
+				const reason = newSignal > oldSignal && newSignal >= 1 ? `signal ${oldSignal}->${newSignal}` : lguAlert === true ? "LGU alert" : null;
+				if (reason && ctx) ctx.waitUntil(alertSubscribers(env, townCode, update, reason).catch((e) => console.log(`alert error: ${e.message}`)));
+				return json({ update, alerted: Boolean(reason) });
 			}
 
 			if (request.method === "DELETE") {

@@ -548,3 +548,15 @@ int _requiredInt(Map<String, dynamic> json, String field) {
   if (value is int) return value;
   throw FormatException('The API response has an invalid $field.');
 }
+
+
+/// Flood pins carry flood height in tenths of a metre in [MapPinUpdate.intensity]
+/// (0-100 = 0-10 m); evacuation pins carry % full; road pins a %.
+String pinAmountText(MapPinUpdate pin) {
+  if (pin.category == 'flood') {
+    final m = pin.intensity / 10;
+    return 'Flood height ${m.toStringAsFixed(1)} m (${(m * 3.281).toStringAsFixed(1)} ft)';
+  }
+  if (pin.category == 'evacuation') return 'Occupancy: ${pin.intensity}% full';
+  return 'Severity: ${pin.intensity}%';
+}

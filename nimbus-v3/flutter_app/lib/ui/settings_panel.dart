@@ -28,7 +28,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
   final _apiUrlController = TextEditingController();
   final _secureStorage = const FlutterSecureStorage();
   late bool _darkMode = widget.darkMode;
-  bool _demoMode = false;
+  bool _drillMode = false;
+  (String, String)? _town;
+  bool _alertsOn = false;
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -51,7 +53,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
     try {
       final number = await widget.sms.getGatewayNumber();
       final trustedLguNumber = await widget.sms.getTrustedLguNumber();
-      final demoMode = await widget.sms.getDemoMode();
+      final drillMode = await widget.sms.getDrillMode();
+      final town = await widget.sms.getCurrentTown();
+      final alertTowns = await widget.sms.getAlertTowns();
       final savedApiUrl = await _secureStorage.read(
         key: LguApiService.apiUrlStorageKey,
       );
@@ -63,7 +67,9 @@ class _SettingsPanelState extends State<SettingsPanel> {
             savedApiUrl?.trim().isNotEmpty == true
                 ? savedApiUrl!.trim()
                 : 'https://nimbus-worker.gozocharlyz.workers.dev/api';
-        _demoMode = demoMode;
+        _drillMode = drillMode;
+        _town = town;
+        _alertsOn = town != null && alertTowns.contains(town.$1);
         _loading = false;
       });
     } on DatabaseException catch (error) {
@@ -114,30 +120,6 @@ class _SettingsPanelState extends State<SettingsPanel> {
       setState(() {
         _saving = false;
         _error = 'Could not save the relay number: $error';
-      });
-    }
-  }
-
-  Future<void> _toggleDemoMode(bool enabled) async {
-    setState(() {
-      _demoMode = enabled;
-      _error = null;
-    });
-    try {
-      await widget.sms.setDemoMode(enabled);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(enabled
-              ? 'Demo mode enabled. Restart NIMBUS to load Batangas City demo data.'
-              : 'Demo mode disabled.'),
-        ),
-      );
-    } on DatabaseException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _demoMode = !enabled;
-        _error = 'Could not save demo mode: $error';
       });
     }
   }
@@ -223,11 +205,93 @@ class _SettingsPanelState extends State<SettingsPanel> {
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Demo mode'),
-            subtitle: const Text('Batangas City simulation: LGU updates, weather, PAGASA and map pins'),
-            secondary: const Icon(Icons.science_outlined),
-            value: _demoMode,
-            onChanged: _loading || _saving ? null : _toggleDemoMode,
+            title: Text(_town == null ? 'SMS alerts' : 'SMS alerts for ${_town!.$2}'),
+            subtitle: Text(_town == null
+                ? 'Choose a town on the map first.'
+                : 'Get a text automatically when PAGASA raises a signal or the LGU '
+                    'posts an urgent update. Change town on the map to switch.'),
+            secondary: const Icon(Icons.notifications_active_outlined),
+            value: _alertsOn,
+            onChanged: _loading || _saving || _town == null
+                ? null
+                : (on) async {
+                    setState(() => _alertsOn = on);
+                    try {
+                      await widget.sms.setAlerts(_town!.$1, on);
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(on
+                            ? 'Turning on alerts for ${_town!.$2}. A confirmation text is on its way.'
+                            : 'Turning off alerts for ${_town!.$2}.'),
+                      ));
+                    } on StateError catch (e) {
+                      if (!mounted) return;
+                      setState(() => _alertsOn = !on);
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text(e.message)));
+                    }
+                  },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Storm drill'),
+            subtitle: const Text(
+              'SMS updates use a replayed PAGASA bulletin, marked DRILL. '
+              'Turn off for real warnings.',
+            ),
+            secondary: const Icon(Icons.flood_outlined),
+            value: _drillMode,
+            onChanged: _loading || _saving
+                ? null
+                : (on) async {
+                    setState(() => _drillMode = on);
+                    await widget.sms.setDrillMode(on);
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(on
+                          ? 'Storm drill on. Tap “Get all updates by SMS”.'
+                          : 'Storm drill off. Back to live PAGASA data.'),
+                    ));
+                  },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_sweep_outlined),
+            title: const Text('Clear saved updates'),
+            subtitle: const Text(
+              'Removes saved SMS updates and cached data for every town. '
+              'Get updates again to see the latest.',
+            ),
+            onTap: _loading || _saving
+                ? null
+                : () async {
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Clear saved updates?'),
+                        content: const Text(
+                          'All saved SMS updates, map pins and cached data for every '
+                          'town are removed from this phone. Your settings are kept.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Clear'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (ok != true) return;
+                    await widget.sms.clearSavedUpdates();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Saved updates cleared. Tap “Get all updates by SMS” to refresh.'),
+                    ));
+                  },
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,

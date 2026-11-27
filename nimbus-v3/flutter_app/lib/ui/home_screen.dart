@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -127,6 +128,9 @@ class _HomeScreenState extends State<HomeScreen> {
   OverlayEntry? _pinBubble;
   Timer? _pinBubbleTimer;
   StreamSubscription<SavedUpdate>? _sub;
+  StreamSubscription<String>? _noticeSub;
+  int _focusRequest = 0;
+  StreamSubscription<void>? _clearSub;
   Timer? _refreshTimer;
   bool _publishedUpdateLoaded = false;
   bool _demoMode = false;
@@ -178,6 +182,27 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
     });
+    unawaited(widget.sms.setCurrentTown(_location.smsCode, _location.name));
+    _clearSub = widget.sms.cleared.listen((_) async {
+      final saved = await widget.sms.saved();
+      if (!mounted) return;
+      setState(() {
+        _saved = saved;
+        _viewing = null;
+        _smsPins = [];
+        _smsPinSnapshotReceived = false;
+        _waiting = false;
+      });
+    });
+    // e.g. "Too many requests from this number. Try again in 6 min."
+    _noticeSub = widget.sms.notices.listen((text) {
+      if (!mounted) return;
+      _weatherFallbackTimer?.cancel();
+      setState(() => _waiting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(text), duration: const Duration(seconds: 8)),
+      );
+    });
     widget.sms.saved().then((s) {
       if (mounted) setState(() => _saved = s);
     });
@@ -195,6 +220,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _pinBubble?.remove();
     _weatherRequestId++;
     _sub?.cancel();
+    _noticeSub?.cancel();
+    _clearSub?.cancel();
     super.dispose();
   }
 
@@ -333,6 +360,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }) {
     _weatherFallbackTimer?.cancel();
     _weatherRequestId++;
+    unawaited(widget.sms.setCurrentTown(location.smsCode, location.name));
+    _focusRequest++; // zoom in even when the same town is picked again
     setState(() {
       _location = location;
       if (clearViewing) _viewing = null;
@@ -363,7 +392,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!_panelController.isAttached) return;
     unawaited(
       _panelController.animateTo(
-        expanded ? 0.35 : 0.17,
+        expanded ? _panelOpen : _panelClosed,
         duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
       ),
@@ -378,6 +407,40 @@ class _HomeScreenState extends State<HomeScreen> {
       _panelExpanded = true;
     });
     _animatePanel(true);
+  }
+
+  static const _panelClosed = 0.17, _panelOpen = 0.55, _panelFull = 0.9;
+
+  /// Dragging the handle/title moves the panel directly (not just the list).
+  void _dragPanel(double dy) {
+    if (!_panelController.isAttached) return;
+    final height = MediaQuery.sizeOf(context).height;
+    _panelController.jumpTo(
+      (_panelController.size - dy / height).clamp(_panelClosed, _panelFull),
+    );
+  }
+
+  /// On release: a flick goes one stop in its direction, otherwise snap to the nearest stop.
+  void _endDragPanel(double velocity) {
+    if (!_panelController.isAttached) return;
+    const stops = [_panelClosed, _panelOpen, _panelFull];
+    final size = _panelController.size;
+    double target;
+    if (velocity < -300) {
+      target = stops.firstWhere((s) => s > size + 0.02, orElse: () => _panelFull);
+    } else if (velocity > 300) {
+      target = stops.lastWhere((s) => s < size - 0.02, orElse: () => _panelClosed);
+    } else {
+      target = stops.reduce((a, b) => (a - size).abs() < (b - size).abs() ? a : b);
+    }
+    setState(() => _panelExpanded = target > _panelClosed + 0.05);
+    unawaited(
+      _panelController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      ),
+    );
   }
 
   void _togglePanel() {
@@ -557,7 +620,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(height: 3),
                             Text('$category · $status'),
                             Text(
-                              '${pin.category == 'evacuation' ? 'Occupancy' : 'Severity'}: ${pin.intensity}%',
+                              pinAmountText(pin),
                             ),
                           ],
                         ),
@@ -728,7 +791,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final reply = latest == null ? null : codec.decode(latest.sms);
     final town = townForLocation(_location);
     final warning =
-        town.warnings[reply?.storm?.warning ?? '2'] ?? ('Storm update', '');
+        // Only a received storm reply with an actual signal may change the title.
+        (reply?.type == 'Q' && (int.tryParse(reply!.storm!.warning) ?? 0) > 0
+            ? town.warnings[reply.storm!.warning]
+            : null) ??
+        ('Storm update', '');
     final activeTab = _tabs.firstWhere((tab) => tab.$1 == _tab);
     return Scaffold(
       body: Stack(
@@ -736,6 +803,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Positioned.fill(
             child: StormMap(
               location: _location,
+              focusRequest: _focusRequest,
               outline: widget.outline,
               floodReported:
                   _publishedUpdate?.floodAreas.any((a) => a.status == 'F') ??
@@ -744,7 +812,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPinTapped: null,
               attributionBottomInset:
                   MediaQuery.sizeOf(context).height *
-                      (_panelExpanded ? 0.35 : 0.17) +
+                      (_panelExpanded ? _panelOpen : _panelClosed) +
                   8,
               errorOverlayLeftInset: 84,
             ),
@@ -777,6 +845,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: _TopPill(
                     title: _tab == 'Q' ? warning.$1 : activeTab.$4,
                     subtitle: '${_location.name} · ${_location.region}',
+                    onTap: () async {
+                      final picked = await showLocationPicker(
+                        context,
+                        widget.locations,
+                        _location,
+                      );
+                      if (picked != null) _onLocationChanged(picked);
+                    },
                   ),
                 ),
                 Positioned(
@@ -794,14 +870,16 @@ class _HomeScreenState extends State<HomeScreen> {
             controller: _panelController,
             initialChildSize: 0.17,
             minChildSize: 0.17,
-            maxChildSize: 0.85,
+            maxChildSize: _panelFull,
             snap: true,
-            snapSizes: const [0.35],
+            snapSizes: const [_panelOpen],
             builder:
                 (context, scroll) => _Sheet(
                   scroll: scroll,
                   expanded: _panelExpanded,
                   onToggleExpanded: _togglePanel,
+                  onDragPanel: _dragPanel,
+                  onDragPanelEnd: _endDragPanel,
                   selected: _tab,
                   title: activeTab.$4,
                   cta: activeTab.$5,
@@ -849,29 +927,52 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _TopPill extends StatelessWidget {
-  const _TopPill({required this.title, required this.subtitle});
+  const _TopPill({required this.title, required this.subtitle, required this.onTap});
   final String title;
   final String subtitle;
+  final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(top: 8),
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-    width: 240,
-    decoration: _floating(context, 16),
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: 'Change town. $subtitle',
+    child: Container(
+      margin: const EdgeInsets.only(top: 8),
+      width: 240,
+      decoration: _floating(context, 16),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        subtitle,
+                        style: TextStyle(fontSize: 12, color: context.nimbusPalette.muted),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.expand_more, size: 20, color: context.nimbusPalette.muted),
+              ],
+            ),
+          ),
         ),
-        Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: context.nimbusPalette.muted),
-          textAlign: TextAlign.center,
-        ),
-      ],
+      ),
     ),
   );
 }
@@ -1096,7 +1197,7 @@ _Row _pinRow(MapPinUpdate pin, String tag) => _Row(
   _pinStatusColor(pin),
   tag,
   pin.label,
-  pin.category == 'evacuation' ? '' : '${pin.intensity}% intensity',
+  pin.category == 'evacuation' ? '' : pinAmountText(pin),
   status: _pinWord(pin),
   percent: pin.category == 'evacuation' ? pin.intensity : null,
 );
@@ -1105,14 +1206,48 @@ _Row _pinRow(MapPinUpdate pin, String tag) => _Row(
 typedef _Count = ({IconData icon, String count, _Sev sev, String label});
 
 ({_Sev sev, String headline, String detail, List<_Count> counts}) _digest(
-  LguUpdate u,
+  LguUpdate update,
   String town,
   String when,
 ) {
+  // Map pins count as places too (an LGU may only drop pins), unless they repeat a
+  // place already in the lists.
+  final listed = {
+    for (final a in update.floodAreas) a.name.trim().toLowerCase(),
+    for (final c in update.evacuationCenters) c.name.trim().toLowerCase(),
+    for (final r in update.roadStatuses) r.name.trim().toLowerCase(),
+  };
+  final pins = [
+    for (final p in update.mapPins)
+      if (!listed.contains(p.label.trim().toLowerCase())) p,
+  ];
+  final u = LguUpdate(
+    townCode: update.townCode,
+    classes: update.classes,
+    notice: update.notice,
+    updatedAt: update.updatedAt,
+    floodAreas: [
+      ...update.floodAreas,
+      for (final p in pins)
+        if (p.category == 'flood') FloodAreaUpdate(name: p.label, level: 'M', status: p.status),
+    ],
+    evacuationCenters: [
+      ...update.evacuationCenters,
+      for (final p in pins)
+        if (p.category == 'evacuation')
+          EvacuationCenterUpdate(name: p.label, status: p.status, percentFull: p.intensity),
+    ],
+    roadStatuses: [
+      ...update.roadStatuses,
+      for (final p in pins)
+        if (p.category == 'road') RoadStatusUpdate(name: p.label, status: p.status),
+    ],
+  );
   if (u.floodAreas.isEmpty &&
       u.evacuationCenters.isEmpty &&
       u.roadStatuses.isEmpty &&
-      u.classes == 0) {
+      u.classes == 0 &&
+      u.notice.trim().isEmpty) {
     return (
       sev: _Sev.neutral,
       headline: '$town LGU report has no area details',
@@ -1226,6 +1361,8 @@ class _Sheet extends StatelessWidget {
     required this.scroll,
     required this.expanded,
     required this.onToggleExpanded,
+    required this.onDragPanel,
+    required this.onDragPanelEnd,
     required this.selected,
     required this.title,
     required this.cta,
@@ -1254,6 +1391,8 @@ class _Sheet extends StatelessWidget {
   final ScrollController scroll;
   final bool expanded;
   final VoidCallback onToggleExpanded;
+  final ValueChanged<double> onDragPanel;
+  final ValueChanged<double> onDragPanelEnd;
   final String selected;
   final String title;
   final String cta;
@@ -1305,13 +1444,13 @@ class _Sheet extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) => Column(
           children: [
-            InkWell(
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: onToggleExpanded,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(18),
-              ),
+              onVerticalDragUpdate: (d) => onDragPanel(d.delta.dy),
+              onVerticalDragEnd: (d) => onDragPanelEnd(d.velocity.pixelsPerSecond.dy),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                 child: Column(
                   children: [
                     Center(
@@ -1360,9 +1499,15 @@ class _Sheet extends StatelessWidget {
                     if (_isOverview)
                       _overviewDigest(context, collapsed: true)
                     else
-                      Text(
-                        'Tap or swipe up for details',
-                        style: TextStyle(fontSize: 14, color: palette.muted),
+                      InkWell(
+                        onTap: onToggleExpanded,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            'Tap or swipe up for details',
+                            style: TextStyle(fontSize: 14, color: palette.muted),
+                          ),
+                        ),
                       ),
                   if (expanded) ...[
                     if (_isOverview) ...[
@@ -1374,11 +1519,6 @@ class _Sheet extends StatelessWidget {
                       const SizedBox(height: 12),
                     ] else
                       const SizedBox(height: 8),
-                    LocationPicker(
-                      location: location,
-                      locations: locations,
-                      onSelected: onLocation,
-                    ),
                     _publishedContent(context),
                     const _SectionHeader(
                       icon: Icons.sms_outlined,
@@ -1759,11 +1899,13 @@ class _Sheet extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _MetaRow(
-          town: location.name,
-          updatedAt: update.updatedAt,
-          onRefresh: onRefreshApi,
-        ),
+        // The Overview summary card already says "Updated …".
+        if (!_isOverview)
+          _MetaRow(
+            town: location.name,
+            updatedAt: update.updatedAt,
+            onRefresh: onRefreshApi,
+          ),
         ...sections,
       ],
     );
@@ -1795,6 +1937,48 @@ class _Sheet extends StatelessWidget {
     return townByCodeOrNull(code) ?? townForLocation(location);
   }
 
+  /// A saved SMS reply as short plain-text bullets.
+  List<String> _savedBullets(SavedUpdate u) {
+    final r = codec.decode(u.sms);
+    if (r == null) return [u.sms];
+    String name(codec.Item i, String kind) => i.customName ?? '$kind ${i.index}';
+    final out = <String>[];
+    switch (r.type) {
+      case 'Q':
+        final s = r.storm!;
+        final w = int.tryParse(s.warning) ?? 0;
+        out.add(w > 0 ? 'Wind signal No. $w' : 'No wind signal');
+        if (s.classes > 0) out.add('Classes suspended (level ${s.classes})');
+        var text = r.notice;
+        for (final marker in [' Do: ', 'Wx: ', 'River: ']) {
+          text = text.replaceAll(marker, '\n${marker.trim()} ');
+        }
+        out.addAll(text.split('\n').map((x) => x.trim()).where((x) => x.isNotEmpty)
+            .map((x) => x.startsWith('Wx:') ? 'Weather: ${x.substring(3).trim()}' : x));
+      case 'F':
+        for (final i in r.items) {
+          out.add('${name(i, 'Area')}: ${switch (i.now) { 'F' => 'flooding now', 'W' => 'on watch', _ => 'no flooding' }}');
+        }
+      case 'E':
+        for (final i in r.items) {
+          out.add('${name(i, 'Site')}: ${switch (i.status) { 'F' => 'full', 'X' => 'closed', _ => 'open, ${i.percentFull ?? 0}% full' }}');
+        }
+      case 'R':
+        for (final i in r.items) {
+          out.add('${name(i, 'Road')}: ${switch (i.status) { 'X' => 'closed', 'L' => 'light vehicles only', _ => 'open' }}');
+        }
+      case 'P':
+        for (final pin in r.pins) {
+          final m = MapPinUpdate(category: pin.category, label: pin.label, latitude: pin.latitude,
+              longitude: pin.longitude, status: pin.status, intensity: pin.intensity);
+          out.add('${pin.label}: ${_pinWord(m).toLowerCase()} · ${pinAmountText(m)}');
+        }
+    }
+    if (out.isEmpty) out.add('Nothing reported');
+    if (!r.valid) out.add('Not verified');
+    return out;
+  }
+
   List<Widget> _content(BuildContext context) {
     if (showSaved) {
       if (saved.isEmpty) {
@@ -1806,33 +1990,48 @@ class _Sheet extends StatelessWidget {
         ];
       }
       return [
+        // Saved records open in place as plain bullets; the Latest tab is left alone.
         for (final u in saved)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: ListTile(
-              minTileHeight: 64,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(_r),
-                side: BorderSide(color: context.nimbusPalette.line),
+            child: Material(
+              type: MaterialType.transparency,
+              child: ExpansionTile(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_r),
+                  side: BorderSide(color: context.nimbusPalette.line),
+                ),
+                collapsedShape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_r),
+                  side: BorderSide(color: context.nimbusPalette.line),
+                ),
+                title: Text(
+                  '${_tabs.firstWhere((t) => t.$1 == u.type, orElse: () => _tabs.first).$4} · ${_locationName(u.townCode)}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text('Received ${_whenText(context, u.received)}'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final line in _savedBullets(u))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text('•  $line', style: const TextStyle(fontSize: 14)),
+                    ),
+                ],
               ),
-              title: Text(
-                '${_tabs.firstWhere((t) => t.$1 == u.type).$4} · ${_locationName(u.townCode)}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                'Received ${TimeOfDay.fromDateTime(u.received).hour}:${u.received.minute.toString().padLeft(2, '0')}',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => onOpenSaved(u),
             ),
           ),
       ];
     }
     final out = <Widget>[];
+    // The SMS reply already carries Open-Meteo weather ("Wx: ..."), so only show the
+    // app's own online lookup when it worked, or when there's no SMS weather to fall back on.
+    final smsHasWeather = reply?.type == 'Q' && reply!.notice.contains('Wx: ');
     if ((selected == 'O' || selected == 'Q') &&
         (weatherFallback != null ||
-            weatherFallbackLoading ||
-            weatherFallbackError != null)) {
+            (!smsHasWeather &&
+                (weatherFallbackLoading || weatherFallbackError != null)))) {
       out.add(
         _WeatherFallback(
           snapshot: weatherFallback,
@@ -1876,13 +2075,22 @@ class _Sheet extends StatelessWidget {
     }
     final rows = <Widget>[];
     var numbered = false;
+    var showBulletin = false;
+    Widget? signalCard; // wind signal gets its own card above the storm details
     switch (r.type) {
       case 'Q':
         final s = r.storm!;
-        final noStormAt = r.notice.toLowerCase().indexOf('no current storm');
+        // Relay appends Open-Meteo local weather as "Wx: ..." at the end.
+        final wxAt = r.notice.indexOf('Wx: ');
+        final wxAll = wxAt >= 0 ? r.notice.substring(wxAt + 4).trim() : '';
+        final riverAt = wxAll.indexOf('River: ');
+        final weather = riverAt >= 0 ? wxAll.substring(0, riverAt).trim() : wxAll;
+        final river = riverAt >= 0 ? wxAll.substring(riverAt + 7).trim() : '';
+        final notice = wxAt >= 0 ? r.notice.substring(0, wxAt).trim() : r.notice;
+        final noStormAt = notice.toLowerCase().indexOf('no current storm');
         if (noStormAt >= 0) {
           // The relay puts the LGU advisory before the PAGASA "no storm" line.
-          final lguNotice = r.notice.substring(0, noStormAt).trim();
+          final lguNotice = notice.substring(0, noStormAt).trim();
           if (lguNotice.isNotEmpty) {
             rows.add(
               _Row(Icons.campaign_outlined, NimbusColors.primary, 'LGU',
@@ -1894,23 +2102,74 @@ class _Sheet extends StatelessWidget {
             _Row(
               Icons.cloud_off_outlined,
               NimbusColors.ok,
-              'PAGASA',
-              r.notice.substring(noStormAt).trim(),
+              '', // the sentence already says "administered by PAGASA"
+              notice.substring(noStormAt).trim(),
               '',
             ),
           );
         } else {
-          rows
-            ..add(
+          // Relay format: [LGU advisory.] [DRILL] <storm line>. Do: <advice>
+          final drill = notice.contains('DRILL ');
+          final doAt = notice.indexOf(' Do: ');
+          final advice = doAt >= 0 ? notice.substring(doAt + 5).trim() : '';
+          final storm = (doAt >= 0 ? notice.substring(0, doAt) : notice)
+              .replaceFirst('DRILL ', '')
+              .trim();
+          final signal = int.tryParse(s.warning) ?? 0;
+          if (drill) {
+            showBulletin = true;
+            rows.add(
               _Row(
-                Icons.warning_amber,
-                NimbusColors.danger,
-                'PAGASA',
-                r.notice.isEmpty ? 'PAGASA bulletin received' : r.notice,
+                Icons.science_outlined,
+                NimbusColors.warning,
+                'DRILL',
+                'Practice storm: replayed PAGASA bulletin',
                 '',
               ),
-            )
-            ..add(
+            );
+          }
+          signalCard = _Group([
+            _Row(
+              Icons.air,
+              signal >= 3
+                  ? NimbusColors.danger
+                  : signal >= 1
+                  ? NimbusColors.warning
+                  : NimbusColors.ok,
+              'Wind signal for ${t.name}',
+              signal > 0 ? 'Signal No. $signal' : 'No wind signal',
+              '',
+              status: switch (signal) {
+                1 => 'Strong winds 39-61 km/h',
+                2 => 'Gale-force winds 62-88 km/h',
+                3 => 'Storm-force winds 89-117 km/h',
+                4 => 'Typhoon-force winds 118-184 km/h',
+                5 => 'Extreme winds 185+ km/h',
+                _ => 'Not under a PAGASA wind signal',
+              },
+            ),
+          ]);
+          rows.add(
+            _Row(
+              Icons.cyclone,
+              NimbusColors.primary,
+              'PAGASA bulletin',
+              storm.isEmpty ? 'PAGASA bulletin received' : storm,
+              '',
+            ),
+          );
+          if (advice.isNotEmpty) {
+            rows.add(
+              _Row(
+                Icons.checklist,
+                NimbusColors.primary,
+                'What to do',
+                advice,
+                '',
+              ),
+            );
+          }
+          rows.add(
               _Row(
                 Icons.cloud_outlined,
                 NimbusColors.primary,
@@ -1919,6 +2178,28 @@ class _Sheet extends StatelessWidget {
                 '',
               ),
             );
+        }
+        if (weather.isNotEmpty) {
+          rows.add(
+            _Row(
+              Icons.thermostat_outlined,
+              NimbusColors.primary,
+              'Local weather · Open-Meteo, not a PAGASA warning',
+              weather,
+              '',
+            ),
+          );
+        }
+        if (river.isNotEmpty) {
+          rows.add(
+            _Row(
+              Icons.water_outlined,
+              NimbusColors.warning,
+              'River forecast · GloFAS via Open-Meteo',
+              river[0].toUpperCase() + river.substring(1),
+              '',
+            ),
+          );
         }
         break;
       case 'F':
@@ -2017,7 +2298,22 @@ class _Sheet extends StatelessWidget {
         }
     }
     out.add(_ReplyMeta(issued: issued, valid: r.valid));
+    if (signalCard != null) out..add(signalCard)..add(const SizedBox(height: 10));
     if (rows.isNotEmpty) out.add(_Group(rows, indent: numbered ? 54 : 48));
+    if (showBulletin) {
+      out.add(
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const _BulletinViewer()),
+            ),
+            icon: const Icon(Icons.description_outlined),
+            label: const Text('View PAGASA bulletin (needs internet)'),
+          ),
+        ),
+      );
+    }
     return out;
   }
 }
@@ -2623,7 +2919,7 @@ class _ReplyMeta extends StatelessWidget {
       child: Row(
         children: [
           Text(
-            'By SMS · $issued',
+            issued,
             style: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w500,
@@ -2991,6 +3287,84 @@ class _Empty extends StatelessWidget {
             style: TextStyle(fontSize: 14, height: 1.4, color: palette.muted),
           ),
         ],
+      ),
+    );
+  }
+}
+
+
+/// The PAGASA bulletin pages the current storm drill was parsed from.
+class _BulletinViewer extends StatefulWidget {
+  const _BulletinViewer();
+
+  @override
+  State<_BulletinViewer> createState() => _BulletinViewerState();
+}
+
+class _BulletinViewerState extends State<_BulletinViewer> {
+  final _api = LguApiService().baseUri;
+  late final Future<Map<String, dynamic>> _drill = _load();
+
+  Future<Map<String, dynamic>> _load() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final request = await client.getUrl(_api.resolve('${_api.path}/drill'));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      return jsonDecode(body) as Map<String, dynamic>;
+    } finally {
+      client.close();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('PAGASA bulletin')),
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _drill,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final d = snap.data;
+          final pages = (d?['pages'] as num?)?.toInt() ?? 0;
+          if (snap.hasError || d == null || d['active'] != true || pages == 0) {
+            return const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'The bulletin can\'t be shown right now. It needs an internet '
+                'connection and an active storm drill.',
+              ),
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.all(12),
+            children: [
+              Text('${d['title']}', style: Theme.of(context).textTheme.titleMedium),
+              Text('Issued ${d['issued']} · ${d['source']}',
+                  style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              const Text('Pinch to zoom.'),
+              const SizedBox(height: 8),
+              for (var n = 1; n <= pages; n++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: InteractiveViewer(
+                    maxScale: 5,
+                    child: Image.network(
+                      _api.resolve('${_api.path}/drill/pages/$n').toString(),
+                      loadingBuilder: (context, child, progress) => progress == null
+                          ? child
+                          : const SizedBox(height: 300, child: Center(child: CircularProgressIndicator())),
+                      errorBuilder: (context, error, stack) =>
+                          Text('Page $n could not load.'),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }

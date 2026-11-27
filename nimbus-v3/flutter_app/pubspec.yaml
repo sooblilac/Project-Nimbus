@@ -30,5 +30,5 @@ flutter:
     - assets/data/philippine_locations.json
     - assets/data/philippines_outline.json
     - assets/data/demo_sms_updates.json
-    - assets/data/hazards/noah_flood_100yr_0401005000.geojson
+    - assets/data/hazards/
     - assets/images/nmbus_mark.png

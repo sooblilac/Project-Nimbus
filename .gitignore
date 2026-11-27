@@ -10,3 +10,6 @@ nimbus-v3/flutter_app/packages/another_telephony/android/gradle/wrapper/chat.jso
 Data/relay_limits.sqlite3
 Data/sms_*.json
 SMS_SendAndRecieve/tunnel.log
+
+# Miniflare local cache
+node_modules/

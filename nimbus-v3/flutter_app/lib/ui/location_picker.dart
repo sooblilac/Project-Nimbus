@@ -16,7 +16,21 @@ class LocationPicker extends StatelessWidget {
   final ValueChanged<PhilippineLocation> onSelected;
 
   Future<void> _open(BuildContext context) async {
-    final selected = await showModalBottomSheet<PhilippineLocation>(
+    final selected = await showLocationPicker(context, locations, location);
+    if (selected != null) onSelected(selected);
+  }
+
+  @override
+  Widget build(BuildContext context) => _buildCard(context);
+}
+
+/// Full-screen town search; returns the chosen town, or null if dismissed.
+Future<PhilippineLocation?> showLocationPicker(
+  BuildContext context,
+  List<PhilippineLocation> locations,
+  PhilippineLocation location,
+) {
+    return showModalBottomSheet<PhilippineLocation>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -28,11 +42,10 @@ class LocationPicker extends StatelessWidget {
           (context) =>
               _LocationSearchSheet(locations: locations, selected: location),
     );
-    if (selected != null) onSelected(selected);
-  }
+}
 
-  @override
-  Widget build(BuildContext context) => Semantics(
+extension on LocationPicker {
+  Widget _buildCard(BuildContext context) => Semantics(
     button: true,
     label: 'Choose town or city. ${location.searchLabel}',
     child: InkWell(

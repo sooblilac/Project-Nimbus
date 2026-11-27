@@ -44,7 +44,7 @@
 const API = /^https?:$/.test(location.protocol) ? location.origin + '/api' : 'https://nimbus-worker.gozocharlyz.workers.dev/api';
 const LGU_KEYS = ['classes', 'notice', 'floodAreas', 'evacuationCenters', 'roadStatuses', 'mapPins'];
 const LGU_DEFAULTS = { classes: 0, notice: '', floodAreas: [], evacuationCenters: [], roadStatuses: [], mapPins: [] };
-const PAGASA_KEYS = ['signal', 'rain', 'gusts', 'pagasaActive', 'pagasaNotice', 'pagasaName', 'pagasaBulletin', 'issuedAt'];
+const PAGASA_KEYS = ['signal', 'rain', 'gusts', 'pagasaActive', 'pagasaNotice', 'pagasaName', 'pagasaBulletin', 'issuedAt', 'pagasaTitle', 'pagasaAdvice'];
 const SEV = { danger: { icon: 'i-error', word: 'Danger' }, warning: { icon: 'i-warn', word: 'Caution' }, ok: { icon: 'i-check', word: 'No alerts' }, neutral: { icon: 'i-dash', word: 'No details' } };
 const FLOOD_STATUS = { F: { word: 'Flooding now', sev: 'danger', icon: 'i-waves', detail: '' }, W: { word: 'On watch', sev: 'warning', icon: 'i-warn', detail: 'Water rising nearby' }, C: { word: 'No flooding', sev: 'ok', icon: 'i-check', detail: '' } };
 const FLOOD_LEVEL = { H: 'High', M: 'Medium', L: 'Low' };
@@ -53,6 +53,11 @@ const ROAD_STATUS = { O: { word: 'Open', sev: 'ok', icon: 'i-check', detail: 'Op
 const CLASSES = ['No suspension', 'All levels', 'Preschool to SHS', 'Preschool to grade 10', 'Preschool to grade 6', 'Preschool only'];
 const RAIN = ['No rain', 'Light rain', 'Moderate rain', 'Heavy rain', 'Intense rain'];
 const PIN_CATS = { flood: { word: 'Flood', glyph: 'i-waves', statuses: ['F', 'W', 'C'], def: 'W' }, evacuation: { word: 'Evacuation center', glyph: 'i-home', statuses: ['O', 'F', 'X'], def: 'O' }, road: { word: 'Road', glyph: 'i-road', statuses: ['O', 'L', 'X'], def: 'X' } };
+// Flood pins store flood height in tenths of a metre in "intensity" (0-100 = 0-10 m),
+// so the SMS format and validation stay unchanged. Evacuation: % full. Roads: %.
+const floodM = (n) => (Number(n) || 0) / 10;
+const ftOf = (m) => (m * 3.281).toFixed(1);
+const pinAmount = (p) => p.category === 'flood' ? `${floodM(p.intensity).toFixed(1)} m (${ftOf(floodM(p.intensity))} ft)` : p.category === 'evacuation' ? `${p.intensity}% full` : `${p.intensity}%`;
 const PIN_WORD = { flood: { F: 'Flooding', W: 'On watch', C: 'Clear' }, road: { X: 'Closed', L: 'Light vehicles only', O: 'Open' }, evacuation: { F: 'Full', X: 'Closed', O: 'Open' } };
 const TEMPLATES = ['Pre-emptive evacuation in effect for low-lying barangays.', 'Classes suspended. Stay indoors.', 'Avoid the riverside. Water is rising.', 'Roads reopened. All clear.', 'Lumikas na sa mataas na lugar.', 'Walang pasok ngayong araw.'];
 const DEPED_HINT = (s) => (s >= 3 ? 1 : s === 2 ? 2 : s === 1 ? 5 : 0);
@@ -67,7 +72,7 @@ const LISTS = {
   roads: { key: 'roadStatuses', title: 'Roads', noun: 'Road', icon: 'i-road', table: ROAD_STATUS, order: ['O', 'L', 'X'], clear: 'O', clearWord: 'Open', add: 'Add road', ph: 'e.g. Riverside road', empty: 'No roads listed', emptyBody: 'Residents see no road status for {town}. Add roads your LGU monitors.', make: () => ({ name: '', status: 'O' }) },
 };
 const KINDS = ['floods', 'evac', 'roads'];
-const SECTIONS = [['overview', 'Overview', 'i-info'], ['pagasa', 'PAGASA', 'i-cloud'], ['classes', 'Classes & advisory', 'i-school'], ['floods', 'Flood areas', 'i-waves'], ['evac', 'Evacuation', 'i-home'], ['roads', 'Roads', 'i-road'], ['map', 'Map pins', 'i-pin'], ['activity', 'Activity', 'i-clock']];
+const SECTIONS = [['overview', 'Overview', 'i-info'], ['pagasa', 'PAGASA', 'i-cloud'], ['classes', 'Classes & advisory', 'i-school'], ['map', 'Map pins', 'i-pin'], ['floods', 'Flood areas', 'i-waves'], ['evac', 'Evacuation', 'i-home'], ['roads', 'Roads', 'i-road'], ['activity', 'Activity', 'i-clock']];
 
 // ===== §3 PURE LOGIC (no DOM) =====
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -147,7 +152,7 @@ function pinErrors(p) {
   if (!lab) e.push('Label needed.');
   else if (!cleanNotice(lab).replace(/\|/g, ' ').trim()) e.push('Use plain letters or numbers so SMS can carry this label.');
   if (!PIN_CATS[p.category] || !PIN_CATS[p.category].statuses.includes(p.status)) e.push('Choose a status for this pin type.');
-  if (!int0100(intStr(p.intensity))) e.push('Use a whole number from 0 to 100.');
+  if (!int0100(intStr(p.intensity))) e.push(p.category === 'flood' ? 'Use a flood height from 0 to 10 m.' : 'Use a whole number from 0 to 100.');
   const okc = (v, m) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= m;
   if (!okc(p.latitude, 90) || !okc(p.longitude, 180)) e.push('Pick a spot on the map.');
   return e;
@@ -258,7 +263,7 @@ function buildReplies(u, code) {
   add('E', 'Evacuation', encode('E', code, ev.length ? ev.map((e, i) => `S${i + 1}${e.status || 'O'}${toInt(e.percentFull)}`) : ['S1O0'], t, notice), ev.length ? ev.map((e, i) => `#${i + 1} ${evacWord(e)} ${toInt(e.percentFull)}%`).join(' · ') : 'None listed (placeholder S1O0)');
   add('R', 'Roads', encode('R', code, rs.length ? rs.map((r, i) => `R${i + 1}${r.status || 'O'}`) : ['R1O'], t, notice), rs.length ? rs.map((r, i) => `#${i + 1} ${ROAD_STATUS[r.status]?.word ?? r.status}`).join(' · ') : 'None listed (placeholder R1O)');
   const pins = L('mapPins');
-  try { add('P', 'Map pins', encodePins(code, pins, t), pins.length ? pins.map((p) => `${p.label} (${pinWord(p)}${p.category === 'evacuation' ? '' : ' ' + p.intensity + '%'})`).join(' · ') : 'No pins', ['Pin replies use ~ separators so phones can rejoin split texts.']); }
+  try { add('P', 'Map pins', encodePins(code, pins, t), pins.length ? pins.map((p) => `${p.label} (${pinWord(p)}${p.category === 'evacuation' ? '' : ' ' + pinAmount(p)})`).join(' · ') : 'No pins', ['Pin replies use ~ separators so phones can rejoin split texts.']); }
   catch { add('P', 'Map pins', '(nothing: a pin label has no plain letters)', 'The relay cannot build this reply. Fix the pin label.'); }
   return out;
 }
@@ -286,7 +291,7 @@ function pinChanges(o, p) {
   const out = [], lab = String(p.label).trim() || o.label;
   if (String(o.label) !== String(p.label).trim()) out.push({ text: `Pin label: "${o.label}" → "${String(p.label).trim()}"`, was: `"${o.label}"` });
   if (o.category !== p.category || o.status !== p.status) out.push({ text: `Pin ${lab}: ${pinWord(o)} → ${pinWord(p)}`, was: pinWord(o), name: `Pin ${lab}`, from: [pinWord(o), pinSev(o)], to: [pinWord(p), pinSev(p)] });
-  if (intStr(o.intensity) !== intStr(p.intensity)) out.push({ text: `Pin ${lab}: ${o.intensity}% → ${p.intensity}%`, was: `${o.intensity}%` });
+  if (intStr(o.intensity) !== intStr(p.intensity)) out.push({ text: `Pin ${lab}: ${pinAmount(o)} → ${pinAmount(p)}`, was: pinAmount(o) });
   if (Math.abs(o.latitude - p.latitude) > 1e-6 || Math.abs(o.longitude - p.longitude) > 1e-6) out.push({ text: `Pin ${lab}: moved`, was: 'old spot' });
   return out;
 }
@@ -846,7 +851,12 @@ function secPagasa() {
     !has ? empty('i-cloud', 'PAGASA data has not reached this town yet. It is added by the PAGASA sync.')
       : u.pagasaActive === false ? empty('i-check', 'No active PAGASA storm for this town.')
         : [h('div', { class: 'stats' }, tile('Wind signal', sig ? badge(sig >= 3 ? 'danger' : 'warning', `Signal No. ${sig}`, 'i-signal') : 'None'), tile('Rain', RAIN[Math.max(0, Math.min(4, toInt(u.rain)))]), tile('Gusts', `${toInt(u.gusts)} km/h`),
-          tile('Bulletin', [u.pagasaName, u.pagasaBulletin && '#' + u.pagasaBulletin].filter(Boolean).join(' · ') || '—', u.issuedAt && `Issued ${u.issuedAt}`)), u.pagasaNotice && h('blockquote', { class: 'quote' }, String(u.pagasaNotice))],
+          tile('Bulletin', [u.pagasaName, u.pagasaBulletin && '#' + u.pagasaBulletin].filter(Boolean).join(' · ') || '—', u.issuedAt && `Issued ${u.issuedAt}`)),
+          sig > 0 && h('div', { class: `box ${sig >= 3 ? 'danger' : 'warning'}`, role: 'status' }, h('h3', null, icon('i-warn', 'i i-sm'), `Signal No. ${sig} over ${ed.loc.name}${u.pagasaTitle ? ' · ' + u.pagasaTitle : ''}`),
+            u.pagasaAdvice && h('p', null, h('strong', null, 'What residents are told: '), String(u.pagasaAdvice)),
+            h('p', { class: 'tiny muted' }, 'Residents subscribed to SMS alerts for this town are texted automatically when PAGASA raises the signal.')),
+          sig === 0 && u.pagasaAdvice && h('p', null, h('strong', null, 'What residents are told: '), String(u.pagasaAdvice)),
+          u.pagasaNotice && h('blockquote', { class: 'quote' }, String(u.pagasaNotice))],
     h('p', { class: 'foot-note' }, icon('i-lock', 'i i-sm'), 'Set by the PAGASA sync. Publishing never changes these.'),
     p && h('p', { class: 'tiny muted' }, `National: ${p.message || (p.active ? 'Active storm' : 'No active storm')}${p.updatedAt ? ' · ' + whenText(p.updatedAt) : ''}`));
 }
@@ -981,7 +991,7 @@ function appPreview(lgu, isDraft, updatedAt) {
   const town = ed.loc.name, dg = digest(lgu, town);
   const row = (ic, sev, name, word, detail, pct) => h('li', { class: 'pv-row' }, icon(ic, 'i i-sm ' + sev + '-ink'), h('div', null, h('p', null, h('span', { class: 'pv-name' }, name), ' · ', h('span', { class: sev + '-ink pv-word' }, word), pct != null && h('span', { class: 'num' }, ` · ${pct}%`)),
     pct != null && h('span', { class: 'meter meter-sm' }, h('span', { class: 'meter-fill ' + sev, style: `width:${Math.max(0, Math.min(100, pct))}%` })), detail && h('p', { class: 'pv-detail' }, detail)));
-  const pins = (cat) => (lgu?.mapPins || []).filter((p) => p.category === cat).map((p) => row('i-pin', pinSev(p), p.label, pinWord(p), cat === 'evacuation' ? '' : `${p.intensity}% intensity`, cat === 'evacuation' ? p.intensity : null));
+  const pins = (cat) => (lgu?.mapPins || []).filter((p) => p.category === cat).map((p) => row('i-pin', pinSev(p), p.label, pinWord(p), cat === 'evacuation' ? '' : pinAmount(p), cat === 'evacuation' ? p.intensity : null));
   const group = (title, kind, rows, cat) => (rows.length || pins(cat).length ? h('section', { class: 'pv-group' }, h('h4', null, title, h('span', { class: 'pv-sum' }, sectionSummary(kind, rows))),
     h('ul', null, previewSort(kind, rows).map((r) => kind === 'evac' ? row(EVAC_STATUS[r.status]?.icon || 'i-home', evacSev(r), r.name, evacWord(r), r.status === 'X' ? '' : EVAC_STATUS[r.status]?.detail, r.status === 'X' ? null : r.percentFull)
       : row(LISTS[kind].table[r.status]?.icon || 'i-dash', LISTS[kind].table[r.status]?.sev || 'neutral', r.name, LISTS[kind].table[r.status]?.word || String(r.status), kind === 'floods' ? [FLOOD_STATUS[r.status]?.detail, FLOOD_LEVEL[r.level] && `${FLOOD_LEVEL[r.level]} risk area`].filter(Boolean).join(' · ') : ROAD_STATUS[r.status]?.detail)), pins(cat))) : null);
@@ -1032,7 +1042,7 @@ function initMapSection() {
 function updateMap() {
   if (!ed || !$('map-toolbar')) return;
   const P = ed.pin, adding = !!P.adding;
-  $('map-toolbar').replaceChildren(h('button', { type: 'button', class: 'btn btn-secondary btn-sm', id: 'pin-add', 'aria-pressed': String(adding), onclick: () => { P.adding = adding ? null : { category: 'flood', label: '', status: 'W', intensity: 50 }; P.form = null; updateMap(); if (P.adding && !ed.map) startPinForm(null); } }, icon(adding ? 'i-close' : 'i-plus', 'i i-sm'), adding ? 'Cancel adding' : 'Add pin'),
+  $('map-toolbar').replaceChildren(h('button', { type: 'button', class: 'btn btn-secondary btn-sm', id: 'pin-add', 'aria-pressed': String(adding), onclick: () => { P.adding = adding ? null : { category: 'flood', label: '', status: 'W', intensity: 5 }; P.form = null; updateMap(); if (P.adding && !ed.map) startPinForm(null); } }, icon(adding ? 'i-close' : 'i-plus', 'i i-sm'), adding ? 'Cancel adding' : 'Add pin'),
     adding && h('span', { class: 'help', role: 'status' }, 'Click the map to place the pin · Esc to cancel'));
   $('map')?.classList.toggle('is-adding', adding && !P.form);
   $('pin-form-slot').replaceChildren(P.form ? pinForm() : '');
@@ -1042,7 +1052,7 @@ function updateMap() {
 }
 function pinIconEl(p, extra = '') {
   const el = h('div', { class: `pin pin--${p.category} sev-${pinSev(p)} ${extra}` }, icon(PIN_CATS[p.category]?.glyph || 'i-pin', 'i i-sm'));
-  return h('div', { class: 'pin-holder' }, el, p.category !== 'evacuation' && int0100(intStr(p.intensity)) && h('span', { class: 'pin-tag' }, `${intStr(p.intensity)}%`));
+  return h('div', { class: 'pin-holder' }, el, p.category !== 'evacuation' && int0100(intStr(p.intensity)) && h('span', { class: 'pin-tag' }, p.category === 'flood' ? `${floodM(intStr(p.intensity)).toFixed(1)} m` : `${intStr(p.intensity)}%`));
 }
 function renderMarkers() {
   if (!ed.map) return; const { layer, m } = ed.map, P = ed.pin; layer.clearLayers();
@@ -1061,7 +1071,7 @@ function renderMarkers() {
   void m;
 }
 function startPinForm(id, latlng) {
-  const P = ed.pin, pre = P.adding || { category: 'flood', label: '', status: 'W', intensity: 50 };
+  const P = ed.pin, pre = P.adding || { category: 'flood', label: '', status: 'W', intensity: 5 };
   const c = latlng || (ed.loc.latitude != null ? { lat: ed.loc.latitude, lng: ed.loc.longitude } : { lat: NaN, lng: NaN });
   P.form = { id: null, ...pre, latitude: +Number(c.lat).toFixed(6), longitude: +Number(c.lng).toFixed(6), tried: false, coords: !latlng };
   P.adding = null; updateMap(); setTimeout(() => $('pf-label')?.focus(), 0);
@@ -1076,7 +1086,11 @@ function pinForm() {
   const f = ed.pin.form, cat = PIN_CATS[f.category] ? f.category : 'flood', errs = f.tried ? pinErrors(f) : [], names = [...new Set(KINDS.flatMap((k) => ed.draft[LISTS[k].key].map((r) => String(r.name).trim())).filter(Boolean))];
   const smsLabel = () => cleanNotice(f.label).replace(/\|/g, ' ').replace(/\s+/g, '_') || '(empty)';
   const re = () => { $('pin-form-slot').replaceChildren(pinForm()); renderMarkers(); };
-  const num = h('input', { id: 'pf-int-n', class: 'input pct', inputmode: 'numeric', value: String(f.intensity), 'aria-label': (cat === 'evacuation' ? 'Occupancy' : 'Severity') + ' percent', oninput: (e) => { f.intensity = e.target.value; const v = intStr(e.target.value); if (int0100(v)) { $('pf-int').value = v; $('pf-out').value = v + '%'; } } });
+  const isFlood = cat === 'flood';
+  const shown = (v) => isFlood ? `${floodM(v).toFixed(1)} m · ${ftOf(floodM(v))} ft` : v + '%';
+  const num = isFlood
+    ? h('input', { id: 'pf-int-n', class: 'input pct', type: 'number', inputmode: 'decimal', min: '0', max: '10', step: '0.1', value: floodM(f.intensity).toFixed(1), 'aria-label': 'Flood height in metres', oninput: (e) => { const v = Math.round(Number(e.target.value) * 10); if (Number.isFinite(v) && v >= 0 && v <= 100) { f.intensity = v; $('pf-int').value = v; $('pf-out').value = shown(v); } } })
+    : h('input', { id: 'pf-int-n', class: 'input pct', inputmode: 'numeric', value: String(f.intensity), 'aria-label': (cat === 'evacuation' ? 'Occupancy' : 'Severity') + ' percent', oninput: (e) => { f.intensity = e.target.value; const v = intStr(e.target.value); if (int0100(v)) { $('pf-int').value = v; $('pf-out').value = v + '%'; } } });
   const coordIn = (k, lab) => h('label', { class: 'field-inline' }, lab, h('input', { class: 'input', type: 'number', step: 'any', id: 'pf-' + k, value: Number.isFinite(f[k]) ? String(f[k]) : '', oninput: (e) => { f[k] = e.target.value === '' ? NaN : Number(e.target.value); }, onchange: re }));
   const cancel = () => { ed.pin.form = null; ed.pin.sel = null; updateMap(); $('pin-add')?.focus(); };
   const save = () => {
@@ -1093,8 +1107,9 @@ function pinForm() {
       h('input', { id: 'pf-label', class: 'input', value: f.label, maxlength: '40', list: 'pf-names', autocomplete: 'off', oninput: (e) => { f.label = e.target.value; $('pf-count').textContent = `${f.label.length}/40`; $('pf-sms').textContent = 'SMS: ' + smsLabel(); } }),
       h('datalist', { id: 'pf-names' }, names.map((n) => h('option', { value: n }))), h('p', { class: 'help' }, h('span', { id: 'pf-count', class: 'num' }, `${String(f.label).length}/40`), ' · ', h('code', { id: 'pf-sms' }, 'SMS: ' + smsLabel()))),
     h('div', { class: 'field' }, h('span', { class: 'label' }, 'Status'), seg({ name: 'pf-status', legend: 'Pin status', idp: 'pf-st', value: f.status, options: PIN_CATS[cat].statuses.map((v) => ({ value: v, word: PIN_WORD[cat][v], sev: pinSev({ category: cat, status: v, intensity: 0 }), icon: SEV[pinSev({ category: cat, status: v, intensity: 0 })].icon })), onChange: (v) => { f.status = v; re(); } })),
-    h('div', { class: 'field' }, h('label', { for: 'pf-int', class: 'label' }, cat === 'evacuation' ? 'Occupancy' : 'Severity'),
-      h('div', { class: 'range-row' }, h('input', { id: 'pf-int', type: 'range', min: '0', max: '100', step: '5', value: String(int0100(intStr(f.intensity)) ? intStr(f.intensity) : 50), oninput: (e) => { f.intensity = Number(e.target.value); num.value = e.target.value; $('pf-out').value = e.target.value + '%'; } }), num, h('output', { id: 'pf-out', for: 'pf-int' }, `${f.intensity}%`))),
+    h('div', { class: 'field' }, h('label', { for: 'pf-int', class: 'label' }, isFlood ? 'Flood height (metres)' : cat === 'evacuation' ? 'Occupancy' : 'Severity'),
+      h('div', { class: 'range-row' }, h('input', { id: 'pf-int', type: 'range', min: '0', max: '100', step: isFlood ? '1' : '5', value: String(int0100(intStr(f.intensity)) ? intStr(f.intensity) : isFlood ? 5 : 50), oninput: (e) => { f.intensity = Number(e.target.value); num.value = isFlood ? floodM(e.target.value).toFixed(1) : e.target.value; $('pf-out').value = shown(e.target.value); } }), num, h('output', { id: 'pf-out', for: 'pf-int' }, shown(f.intensity))),
+      isFlood && h('p', { class: 'help' }, 'Knee-high ≈ 0.5 m · waist-high ≈ 1 m · above head ≈ 2 m.')),
     h('details', { open: f.coords || !Number.isFinite(f.latitude) }, h('summary', null, 'Edit coordinates'), h('div', { class: 'coords' }, coordIn('latitude', 'Latitude'), coordIn('longitude', 'Longitude'))),
     Number.isFinite(f.latitude) && Number.isFinite(f.longitude) && h('p', { class: 'tiny muted num' }, `${Number(f.latitude).toFixed(5)}, ${Number(f.longitude).toFixed(5)}${ed.map ? ' · drag the pin to adjust' : ''}`),
     errs.map((e) => h('p', { class: 'err' }, icon('i-error', 'i i-sm'), e)),
@@ -1111,7 +1126,7 @@ function renderPinList() {
     return h('li', { class: 'pin-row' + (st ? ' is-' + st : '') + (ed.pin.sel === p._id ? ' is-sel' : '') },
       h('span', { class: `pin-mini pin--${p.category}` }, icon(PIN_CATS[p.category]?.glyph || 'i-pin', 'i i-xs')),
       h('div', { class: 'pin-main' }, h('p', null, h('strong', null, p.label || '(no label)'), ' ', h('span', { class: 'muted' }, PIN_CATS[p.category]?.word || p.category)),
-        h('p', null, badge(pinSev(p), pinWord(p)), p.category !== 'evacuation' ? ` ${p.intensity}%` : ` ${p.intensity}% full`, st === 'changed' && ' ', st === 'changed' && badge('info', 'Changed', 'i-info'), st === 'new' && ' ', st === 'new' && badge('info', 'New', 'i-plus')),
+        h('p', null, badge(pinSev(p), pinWord(p)), ` ${pinAmount(p)}`, st === 'changed' && ' ', st === 'changed' && badge('info', 'Changed', 'i-info'), st === 'new' && ' ', st === 'new' && badge('info', 'New', 'i-plus')),
         errs.map((e) => h('p', { class: 'err' }, icon('i-error', 'i i-sm'), e.msg)), ws.map((w) => warnLine(w))),
       h('div', { class: 'pin-actions' }, !p._removed && btn('Show on map', 'btn-tertiary btn-sm', () => editPin(p._id), { id: 'pin-' + p._id }),
         p._removed ? btn('Restore', 'btn-tertiary btn-sm', () => set({ _removed: false }), { id: `pin-${p._id}-restore` })
@@ -1178,6 +1193,8 @@ function renderReview() {
       ws.length > 0 && h('div', { class: 'box warning' }, h('h3', null, icon('i-warn', 'i i-sm'), 'Check these'), ws.map((w) => warnLine(w, renderReview))),
       h('h3', null, 'What changes'), changes,
       h('p', { class: 'kept' }, icon('i-lock', 'i i-sm'), 'Kept as-is: PAGASA signal, rain, gusts and bulletin stay unchanged.'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'rv-alert', checked: !!ed.alertSubs, onchange: (e) => { ed.alertSubs = e.target.checked; } }),
+        ` Text this update now to residents subscribed to SMS alerts for ${loc.name}`),
       h('h3', null, 'Preview'), previewNode(d.lgu, true, null)],
     foot: [btn('Back to editing', 'btn-secondary', () => $('review').close(), { id: 'rv-back' }), pub],
   });
@@ -1260,17 +1277,18 @@ async function doPublish() {
     }
     const lgu = lguFromDraft(ed.draft), lines = ed.d.diff.lines.filter((l) => l.kind !== 'info').map((l) => l.text);
     const meta = { publishedAt: new Date().toISOString(), publishedBy: S.session.username, summary: lines.slice(0, 3).join('; ').slice(0, 200) || 'Reconfirmed, no changes' };
-    await api('POST', `/towns/${primary}/updates`, mergeBody(fresh, lgu, meta), { auth: true, town });
+    const alertFlag = ed.alertSubs ? { alertSubscribers: true } : {};
+    await api('POST', `/towns/${primary}/updates`, { ...mergeBody(fresh, lgu, meta), ...alertFlag }, { auth: true, town });
     const results = [{ code: primary, ok: true }];
     let note = '';
     if (ed.legacy && ed.legacyWritable) {
-      try { const lf = await getTown(ed.legacy); await api('POST', `/towns/${ed.legacy}/updates`, mergeBody(lf, lgu, meta), { auth: true, town }); results.push({ code: ed.legacy, ok: true }); clearBanner('ed:legacy'); }
+      try { const lf = await getTown(ed.legacy); await api('POST', `/towns/${ed.legacy}/updates`, { ...mergeBody(lf, lgu, meta), ...alertFlag }, { auth: true, town }); results.push({ code: ed.legacy, ok: true }); clearBanner('ed:legacy'); }
       catch (e) { results.push({ code: ed.legacy, ok: false }); legacyFailed(lgu, meta, e); }
     } else if (ed.legacy) note = ` · SMS code ${ed.legacy} not updated (no access).`;
     let after = null; try { after = await getTown(primary); } catch { /* verified stays false */ }
     const verified = !!after && lguEqual(after.update, lgu);
     addHistory(primary, { at: meta.publishedAt, by: meta.publishedBy, lines: lines.length ? lines : ['Reconfirmed, no changes'], lgu, codes: results, verified });
-    store.del(draftKey(primary)); S.ui.offlineFailed = false; ['ed:publish', 'ed:verify'].forEach(clearBanner);
+    store.del(draftKey(primary)); S.ui.offlineFailed = false; ed.alertSubs = false; ['ed:publish', 'ed:verify'].forEach(clearBanner);
     unbusy(); d.close();
     loadBase(after || { update: { ...mergeBody(fresh, lgu, meta), townCode: primary }, updatedAt: meta.publishedAt });
     if (ed.legacyBase !== undefined && ed.legacy) ed.legacyBase = null;

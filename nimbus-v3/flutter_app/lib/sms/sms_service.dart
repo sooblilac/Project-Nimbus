@@ -65,6 +65,10 @@ class SmsService implements PinSnapshotSender {
 
   Stream<SavedUpdate> get replies => _replies.stream;
 
+  /// Plain "NIMBUS: ..." texts from the gateway (e.g. rate-limit notices).
+  final _notices = StreamController<String>.broadcast();
+  Stream<String> get notices => _notices.stream;
+
   Future<bool> start() => _start(gatewayMode: false);
 
   Future<bool> startGateway() async {
@@ -86,6 +90,10 @@ class SmsService implements PinSnapshotSender {
       onBackgroundMessage: nimbusSmsBackgroundHandler,
     );
     if (!gatewayMode) {
+      if (!await getDrillMode()) {
+        // Leftovers from an earlier drill never show as real warnings.
+        await _db.delete('saved_updates', where: "sms LIKE '%/DRILL %' OR sms LIKE '% DRILL %'");
+      }
       _inboxSyncTimer?.cancel();
       await syncInboxReplies();
       _inboxSyncTimer = Timer.periodic(
@@ -185,7 +193,56 @@ class SmsService implements PinSnapshotSender {
     await _setBooleanSetting('darkMode', enabled);
   }
 
-  Future<bool> getDemoMode() => _getBooleanSetting('demoMode');
+  /// Demo mode is retired (the Settings toggle was removed); always off.
+  Future<bool> getDemoMode() async => false;
+
+  /// The town selected on the map (SMS code and name), for Settings.
+  Future<void> setCurrentTown(String code, String name) => _db.insert(
+      'app_settings', {'key': 'currentTown', 'value': '$code|$name'},
+      conflictAlgorithm: ConflictAlgorithm.replace);
+
+  Future<(String, String)?> getCurrentTown() async {
+    final rows = await _db.query('app_settings',
+        columns: ['value'], where: 'key = ?', whereArgs: ['currentTown'], limit: 1);
+    if (rows.isEmpty) return null;
+    final parts = (rows.single['value'] as String).split('|');
+    return parts.length == 2 ? (parts[0], parts[1]) : null;
+  }
+
+  /// Towns this phone gets automatic SMS alerts for (NB1 SUB / NB1 UNSUB).
+  Future<Set<String>> getAlertTowns() async {
+    final rows = await _db.query('app_settings',
+        columns: ['value'], where: 'key = ?', whereArgs: ['alertTowns'], limit: 1);
+    final raw = rows.isEmpty ? '' : rows.single['value'] as String;
+    return raw.split(',').where((c) => c.isNotEmpty).toSet();
+  }
+
+  Future<void> setAlerts(String townCode, bool on) async {
+    final gatewayNumber = (await getGatewayNumber()).trim();
+    if (gatewayNumber.isEmpty) {
+      throw StateError('Configure the SMS relay number before turning on alerts.');
+    }
+    await _telephony.sendSms(
+      to: gatewayNumber,
+      message: on ? 'NB1 SUB $townCode' : 'NB1 UNSUB $townCode',
+    );
+    final towns = await getAlertTowns();
+    on ? towns.add(townCode) : towns.remove(townCode);
+    await _db.insert('app_settings', {'key': 'alertTowns', 'value': towns.join(',')},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// Storm drill: SMS requests ask for the replayed PAGASA bulletin (NB1 ASK ... D).
+  Future<bool> getDrillMode() => _getBooleanSetting('drillMode');
+
+  Future<void> setDrillMode(bool enabled) async {
+    await _setBooleanSetting('drillMode', enabled);
+    if (!enabled) {
+      // Drill replies must not linger as if they were real warnings.
+      await _db.delete('saved_updates', where: "sms LIKE '%/DRILL %' OR sms LIKE '% DRILL %'");
+      _cleared.add(null);
+    }
+  }
 
   Future<void> setDemoMode(bool enabled) async {
     await _setBooleanSetting('demoMode', enabled);
@@ -219,7 +276,7 @@ class SmsService implements PinSnapshotSender {
     }
     await _telephony.sendSms(
       to: gatewayNumber,
-      message: 'NB1 ASK $type $townCode',
+      message: 'NB1 ASK $type $townCode${await getDrillMode() ? ' D' : ''}',
     );
   }
 
@@ -247,13 +304,39 @@ class SmsService implements PinSnapshotSender {
     final gatewayNumber = (await getGatewayNumber()).trim();
     if (gatewayNumber.isEmpty) return;
     final messages = await _telephony.getInboxSms();
+    final clearedAt = await _clearedAt();
     for (final message in messages.take(30)) {
       final from = message.address ?? '';
       if (!_samePhoneNumber(from, gatewayNumber)) continue;
+      // Replies from before "Clear saved updates" stay cleared.
+      if ((message.date ?? 0) <= clearedAt) continue;
+      final body = message.body ?? '';
+      if (body.contains('DRILL ') && !await getDrillMode()) continue;
       final reply = codec.decode(message.body ?? '');
       if (reply == null || !reply.valid) continue;
       await _saveReply(reply, message.body ?? '', replaceDuplicate: true);
     }
+  }
+
+  /// Fires after [clearSavedUpdates] so screens can reload.
+  final _cleared = StreamController<void>.broadcast();
+  Stream<void> get cleared => _cleared.stream;
+
+  Future<int> _clearedAt() async {
+    final rows = await _db.query('app_settings',
+        columns: ['value'], where: 'key = ?', whereArgs: ['clearedAt'], limit: 1);
+    return rows.isEmpty ? 0 : int.tryParse(rows.single['value'] as String) ?? 0;
+  }
+
+  /// Deletes every saved SMS update and cached LGU/PAGASA data for all towns.
+  /// Older replies still in the phone's inbox are ignored from now on.
+  Future<void> clearSavedUpdates() async {
+    await _db.delete('saved_updates');
+    await _db.delete('app_settings', where: "key LIKE 'cache:%'");
+    await _db.insert('app_settings',
+        {'key': 'clearedAt', 'value': '${DateTime.now().millisecondsSinceEpoch}'},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    _cleared.add(null);
   }
 
   Future<SavedUpdate?> latestTypeSnapshot(String type, String townCode) async {
@@ -302,6 +385,11 @@ class SmsService implements PinSnapshotSender {
   Future<void> _handleResidentReply(String from, String body) async {
     final gatewayNumber = await getGatewayNumber();
     if (gatewayNumber.isEmpty || !_samePhoneNumber(from, gatewayNumber)) return;
+    if (body.startsWith('NIMBUS:')) {
+      _notices.add(body.substring(7).trim());
+      return;
+    }
+    if (body.contains('DRILL ') && !await getDrillMode()) return; // late drill reply
     final reply = codec.decode(body);
     if (reply == null || !reply.valid) return;
     await _saveReply(reply, body);

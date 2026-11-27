@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -13,10 +14,47 @@ import '../lgu/lgu_api.dart';
 import 'offline_map_plan.dart';
 import 'theme.dart';
 
-/// Bundled UP NOAH flood hazard maps (100-year rain), keyed by PSGC town code.
+/// Bundled UP NOAH hazard maps, keyed by PSGC town code then hazard.
 /// See assets/data/hazards/ATTRIBUTION.md for source and license (ODbL).
-const _floodHazardAssets = {
-  '0401005000': 'assets/data/hazards/noah_flood_100yr_0401005000.geojson',
+const _hazardDir = 'assets/data/hazards';
+const _hazardAssets = <String, Map<String, String>>{
+  '0401005000': {
+    'flood': '$_hazardDir/noah_flood_100yr_0401005000.geojson',
+    'landslide': '$_hazardDir/noah_landslide_0401005000.geojson',
+    'surge': '$_hazardDir/noah_surge_0401005000.geojson',
+  },
+  '0401019000': {
+    'flood': '$_hazardDir/noah_flood_0401019000.geojson',
+    'landslide': '$_hazardDir/noah_landslide_0401019000.geojson',
+    'surge': '$_hazardDir/noah_surge_0401019000.geojson',
+  },
+  '0200901000': {
+    'flood': '$_hazardDir/noah_flood_0200901000.geojson',
+    'landslide': '$_hazardDir/noah_landslide_0200901000.geojson',
+    'surge': '$_hazardDir/noah_surge_0200901000.geojson',
+  },
+};
+
+/// Menu label, legend title, legend footnote, icon.
+const _hazardInfo = <String, (String, String, String, IconData)>{
+  'flood': (
+    'Flood',
+    'Flood-prone in heavy rain',
+    'UP NOAH · 100-yr rain · not live',
+    Icons.flood_outlined,
+  ),
+  'landslide': (
+    'Landslide',
+    'Landslide-prone areas',
+    'UP NOAH · not live',
+    Icons.landslide_outlined,
+  ),
+  'surge': (
+    'Storm surge',
+    'Storm surge, worst case',
+    'UP NOAH · surge advisory 4 · not live',
+    Icons.tsunami_outlined,
+  ),
 };
 const _hazardSourceId = 'noah-flood-hazard';
 const _hazardLayerId = 'noah-flood-hazard-fill';
@@ -28,6 +66,7 @@ class StormMap extends StatefulWidget {
   const StormMap({
     super.key,
     required this.location,
+    this.focusRequest = 0,
     required this.outline,
     required this.floodReported,
     this.mapPins = const [],
@@ -39,6 +78,9 @@ class StormMap extends StatefulWidget {
   });
 
   final PhilippineLocation location;
+
+  /// Bump to fly to [location] again, even if it didn't change.
+  final int focusRequest;
   final PhilippineOutline outline;
   final bool floodReported;
   final List<MapPinUpdate> mapPins;
@@ -69,17 +111,21 @@ class _StormMapState extends State<StormMap> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final next = _activeStyleUrl;
-    if (_appliedStyleUrl != null && next != _appliedStyleUrl && _controller != null) {
+    if (_appliedStyleUrl != null &&
+        next != _appliedStyleUrl &&
+        _controller != null) {
       _appliedStyleUrl = next;
       unawaited(_reloadMapStyle());
     }
   }
+
   static const _userAgent = 'Nimbus/3.0 (Android; offline map client)';
 
   ml.MapLibreMapController? _controller;
   ml.Circle? _locationMarker;
   final _fallbackTransformationController = TransformationController();
   final Map<ml.Circle, MapPinUpdate> _pinMarkers = {};
+  final Map<ml.Symbol, MapPinUpdate> _pinSymbols = {};
   Future<void> _pinSyncQueue = Future<void>.value();
   int _pinSyncId = 0;
   List<ml.OfflineRegion> _regions = [];
@@ -99,11 +145,15 @@ class _StormMapState extends State<StormMap> {
   bool _pinLabelUpdateInFlight = false;
   bool _pinLabelUpdatePending = false;
   final Map<String, Offset> _pinLabelPositions = {};
-  bool _showFloodHazard = false;
+
+  /// Hazard map shown: 'flood', 'landslide', 'surge' or null for none.
+  String? _hazard;
+  bool _toolsOpen = false;
   String? _hazardOnMapCode;
   Future<void> _hazardQueue = Future<void>.value();
 
-  String? get _hazardAsset => _floodHazardAssets[widget.location.code];
+  Map<String, String>? get _townHazards => _hazardAssets[widget.location.code];
+  String? get _hazardAsset => _hazard == null ? null : _townHazards?[_hazard];
 
   @override
   void initState() {
@@ -122,7 +172,8 @@ class _StormMapState extends State<StormMap> {
   @override
   void didUpdateWidget(covariant StormMap oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.location.code != widget.location.code) {
+    if (oldWidget.location.code != widget.location.code ||
+        oldWidget.focusRequest != widget.focusRequest) {
       unawaited(_focusLocation());
       unawaited(_syncFloodHazard());
     }
@@ -179,11 +230,19 @@ class _StormMapState extends State<StormMap> {
     _controller = controller;
     _cameraZoom = _locationZoom;
     controller.onCircleTapped.add(_onCircleTapped);
+    controller.onSymbolTapped.add((symbol) {
+      final pin = _pinSymbols[symbol];
+      if (pin != null) _onPinTapped(pin);
+    });
   }
 
   void _onCircleTapped(ml.Circle circle) {
     final pin = _pinMarkers[circle];
-    if (pin != null) {
+    if (pin != null) _onPinTapped(pin);
+  }
+
+  void _onPinTapped(MapPinUpdate pin) {
+    {
       setState(() => _selectedPin = pin);
       unawaited(_updateSelectedPinPosition());
       widget.onPinTapped?.call(pin);
@@ -223,6 +282,7 @@ class _StormMapState extends State<StormMap> {
   }
 
   void _onCameraIdle() {
+    if (_toolsOpen && mounted) setState(() {}); // keep the zoom slider in step
     unawaited(_updateSelectedPinPosition());
     unawaited(_updatePinLabelPositions());
   }
@@ -230,10 +290,11 @@ class _StormMapState extends State<StormMap> {
   Future<void> _showPinBubble(MapPinUpdate pin) async {
     widget.onPinTapped?.call(pin);
     if (_cameraZoom < 11) {
-      if (mounted) setState(() {
-        _selectedPin = null;
-        _selectedPinScreenPoint = null;
-      });
+      if (mounted)
+        setState(() {
+          _selectedPin = null;
+          _selectedPinScreenPoint = null;
+        });
       return;
     }
     final controller = _controller;
@@ -264,7 +325,8 @@ class _StormMapState extends State<StormMap> {
           (coordinates.longitude - pin.longitude) *
           math.cos(pin.latitude * math.pi / 180);
       final distance = math.sqrt(
-        latitudeDistance * latitudeDistance + longitudeDistance * longitudeDistance,
+        latitudeDistance * latitudeDistance +
+            longitudeDistance * longitudeDistance,
       );
       if (distance < nearestDistance) {
         nearestDistance = distance;
@@ -326,6 +388,7 @@ class _StormMapState extends State<StormMap> {
     }
     _locationMarker = null;
     _pinMarkers.clear();
+    _pinSymbols.clear();
     _hazardOnMapCode = null; // a new style drops custom sources and layers
     unawaited(_syncFloodHazard());
     unawaited(_focusLocation());
@@ -381,6 +444,9 @@ class _StormMapState extends State<StormMap> {
     if (!_styleLoaded || controller == null) return Future<void>.value();
     final syncId = ++_pinSyncId;
     final surfaceColor = context.nimbusPalette.surface;
+    final dpr = !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+        ? MediaQuery.devicePixelRatioOf(context)
+        : 1.0;
     final sync = _pinSyncQueue.then((_) async {
       if (syncId != _pinSyncId) return;
       try {
@@ -388,12 +454,20 @@ class _StormMapState extends State<StormMap> {
           await controller.removeCircle(marker);
         }
         _pinMarkers.clear();
+        if (_pinSymbols.isNotEmpty) {
+          await controller.removeSymbols(_pinSymbols.keys.toList());
+          _pinSymbols.clear();
+        }
         if (syncId != _pinSyncId) return;
+        await _addPinIcons(controller);
+        await controller.setSymbolIconAllowOverlap(true);
+        await controller.setSymbolIconIgnorePlacement(true);
         for (final pin in widget.mapPins) {
+          final radius = 12 + pin.intensity / 25;
           final marker = await controller.addCircle(
             ml.CircleOptions(
               geometry: ml.LatLng(pin.latitude, pin.longitude),
-              circleRadius: 9 + pin.intensity / 20,
+              circleRadius: radius,
               circleColor: _hexColor(_pinColorFor(pin)),
               circleStrokeColor: _hexColor(surfaceColor),
               circleStrokeWidth: 3,
@@ -404,6 +478,16 @@ class _StormMapState extends State<StormMap> {
             return;
           }
           _pinMarkers[marker] = pin;
+          // White category symbol on the colored circle: what it is at a glance.
+          final symbol = await controller.addSymbol(
+            ml.SymbolOptions(
+              geometry: ml.LatLng(pin.latitude, pin.longitude),
+              iconImage: 'pin-${_pinKind(pin)}',
+              // Icon image is in physical pixels; the circle radius is in dp.
+              iconSize: radius * 1.3 * dpr / _pinIconPx,
+            ),
+          );
+          _pinSymbols[symbol] = pin;
         }
       } on PlatformException catch (error) {
         _showMessage(
@@ -415,11 +499,51 @@ class _StormMapState extends State<StormMap> {
     return sync;
   }
 
-  double get _locationZoom {
-    if (_hasPack('detail-${widget.location.code}')) return 13;
-    if (_hasPack('philippines-overview')) return 5.2;
-    return 13;
+  static const _pinIconPx = 48.0;
+  static const _pinIcons = {
+    'flood': Icons.water,
+    'evacuation': Icons.home_rounded,
+    'road': Icons.add_road,
+  };
+
+  String _pinKind(MapPinUpdate pin) =>
+      _pinIcons.containsKey(pin.category) ? pin.category : 'flood';
+
+  /// Draws each category glyph (white, Material Icons font) into an image the
+  /// map can use. Images are dropped with the style, so re-add on every sync.
+  Future<void> _addPinIcons(ml.MapLibreMapController controller) async {
+    for (final entry in _pinIcons.entries) {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final painter = TextPainter(
+        text: TextSpan(
+          text: String.fromCharCode(entry.value.codePoint),
+          style: TextStyle(
+            fontSize: _pinIconPx * 0.8,
+            fontFamily: entry.value.fontFamily,
+            package: entry.value.fontPackage,
+            color: Colors.white,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      painter.paint(
+        canvas,
+        Offset((_pinIconPx - painter.width) / 2, (_pinIconPx - painter.height) / 2),
+      );
+      final image = await recorder
+          .endRecording()
+          .toImage(_pinIconPx.toInt(), _pinIconPx.toInt());
+      final png = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (png != null) {
+        await controller.addImage('pin-${entry.key}', png.buffer.asUint8List());
+      }
+    }
   }
+
+  /// Street level for the chosen town. Offline, MapLibre stretches the cached
+  /// overview tiles if the town's detail pack isn't downloaded.
+  double get _locationZoom => 14;
 
   Future<void> _focusLocation() async {
     final controller = _controller;
@@ -429,7 +553,7 @@ class _StormMapState extends State<StormMap> {
         ml.LatLng(widget.location.latitude, widget.location.longitude),
         _locationZoom,
       ),
-      duration: const Duration(milliseconds: 450),
+      duration: const Duration(milliseconds: 900),
     );
   }
 
@@ -744,6 +868,7 @@ class _StormMapState extends State<StormMap> {
     _locationMarker = null;
     _pinSyncId++;
     _pinMarkers.clear();
+    _pinSymbols.clear();
     if (mounted) setState(() => _mapUnavailable = false);
     _startStyleLoadTimer();
     try {
@@ -772,9 +897,10 @@ class _StormMapState extends State<StormMap> {
   /// MapLibre on Android reports screen points in physical pixels, while
   /// Flutter lays out in logical pixels; iOS and web already use logical ones.
   Offset _toLogicalOffset(math.Point<num> point) {
-    final scale = !kIsWeb && defaultTargetPlatform == TargetPlatform.android
-        ? MediaQuery.devicePixelRatioOf(context)
-        : 1.0;
+    final scale =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+            ? MediaQuery.devicePixelRatioOf(context)
+            : 1.0;
     return Offset(point.x / scale, point.y / scale);
   }
 
@@ -814,7 +940,7 @@ class _StormMapState extends State<StormMap> {
             zoomGesturesEnabled: true,
             doubleClickZoomEnabled: true,
             dragEnabled: true,
-            annotationOrder: const [ml.AnnotationType.circle],
+            annotationOrder: const [ml.AnnotationType.circle, ml.AnnotationType.symbol],
             logoEnabled: true,
             scaleControlEnabled: true,
             translucentTextureSurface: false,
@@ -881,21 +1007,124 @@ class _StormMapState extends State<StormMap> {
               },
             ),
           ),
+        // Map tools fold into one button, level with the category dropdown.
         Positioned(
           right: 12,
-          top: 144,
-          child: FloatingActionButton.small(
-            heroTag: 'offline-map-download',
-            tooltip: 'Manage offline maps',
-            onPressed: _openOfflineMaps,
-            child: const Icon(Icons.download_for_offline_outlined),
+          top: 109,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              FloatingActionButton.small(
+                heroTag: 'map-tools-toggle',
+                tooltip: _toolsOpen ? 'Hide map tools' : 'Map tools',
+                backgroundColor:
+                    _toolsOpen || _hazard != null || _showPinLabels
+                        ? NimbusColors.primary
+                        : context.nimbusPalette.surface,
+                foregroundColor:
+                    _toolsOpen || _hazard != null || _showPinLabels
+                        ? Colors.white
+                        : context.nimbusPalette.text,
+                onPressed: () => setState(() => _toolsOpen = !_toolsOpen),
+                child: Icon(_toolsOpen ? Icons.close : Icons.tune),
+              ),
+              if (_toolsOpen) ...[
+                const SizedBox(height: 10),
+                FloatingActionButton.small(
+                  heroTag: 'offline-map-download',
+                  tooltip: 'Manage offline maps',
+                  onPressed: _openOfflineMaps,
+                  child: const Icon(Icons.download_for_offline_outlined),
+                ),
+                const SizedBox(height: 10),
+                FloatingActionButton.small(
+                  heroTag: 'pin-label-toggle',
+                  tooltip:
+                      _showPinLabels ? 'Hide pin labels' : 'Show pin labels',
+                  backgroundColor:
+                      _showPinLabels
+                          ? NimbusColors.primary
+                          : context.nimbusPalette.surface,
+                  foregroundColor:
+                      _showPinLabels
+                          ? Colors.white
+                          : context.nimbusPalette.text,
+                  onPressed: _togglePinLabels,
+                  child: Icon(
+                    _showPinLabels
+                        ? Icons.label_off_outlined
+                        : Icons.label_outline,
+                  ),
+                ),
+                if (_townHazards != null) ...[
+                  const SizedBox(height: 10),
+                  PopupMenuButton<String>(
+                    tooltip: 'Hazard maps',
+                    onSelected: (kind) {
+                      setState(() => _hazard = kind == 'off' ? null : kind);
+                      unawaited(_syncFloodHazard());
+                    },
+                    itemBuilder:
+                        (context) => [
+                          for (final kind in _townHazards!.keys)
+                            CheckedPopupMenuItem(
+                              value: kind,
+                              checked: _hazard == kind,
+                              child: Text('${_hazardInfo[kind]!.$1} hazard'),
+                            ),
+                          const PopupMenuDivider(),
+                          CheckedPopupMenuItem(
+                            value: 'off',
+                            checked: _hazard == null,
+                            child: const Text('No hazard map'),
+                          ),
+                        ],
+                    child: Material(
+                      elevation: 3,
+                      shape: const CircleBorder(),
+                      color:
+                          _hazard != null
+                              ? NimbusColors.primary
+                              : context.nimbusPalette.surface,
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Icon(
+                          _hazard != null
+                              ? _hazardInfo[_hazard]!.$4
+                              : Icons.layers_outlined,
+                          color:
+                              _hazard != null
+                                  ? Colors.white
+                                  : context.nimbusPalette.text,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                _ZoomControl(
+                  zoom: _cameraZoom,
+                  onZoom: (z) {
+                    _cameraZoom = z;
+                    unawaited(_controller?.moveCamera(ml.CameraUpdate.zoomTo(z)));
+                    setState(() {});
+                  },
+                  onStep: (delta) => unawaited(_controller?.animateCamera(
+                    delta > 0 ? ml.CameraUpdate.zoomIn() : ml.CameraUpdate.zoomOut(),
+                    duration: const Duration(milliseconds: 250),
+                  )),
+                ),
+              ],
+            ],
           ),
         ),
         if (_downloading)
           Positioned(
             left: 12,
-            right: 12,
-            top: 144,
+            right: 64,
+            top: 190,
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -917,48 +1146,11 @@ class _StormMapState extends State<StormMap> {
               ),
             ),
           ),
-        Positioned(
-          right: 12,
-          top: 198,
-          child: FloatingActionButton.small(
-            heroTag: 'pin-label-toggle',
-            tooltip: _showPinLabels ? 'Hide pin labels' : 'Show pin labels',
-            backgroundColor: _showPinLabels
-                ? NimbusColors.primary
-                : context.nimbusPalette.surface,
-            foregroundColor: _showPinLabels
-                ? Colors.white
-                : context.nimbusPalette.text,
-            onPressed: _togglePinLabels,
-            child: Icon(_showPinLabels
-                ? Icons.label_off_outlined
-                : Icons.label_outline),
-          ),
-        ),
-        if (_hazardAsset != null)
-          Positioned(
-            right: 12,
-            top: 254,
-            child: FloatingActionButton.small(
-              heroTag: 'flood-hazard-toggle',
-              tooltip: _showFloodHazard
-                  ? 'Hide flood-prone areas'
-                  : 'Show flood-prone areas',
-              backgroundColor: _showFloodHazard
-                  ? NimbusColors.primary
-                  : context.nimbusPalette.surface,
-              foregroundColor: _showFloodHazard
-                  ? Colors.white
-                  : context.nimbusPalette.text,
-              onPressed: _toggleFloodHazard,
-              child: const Icon(Icons.flood_outlined),
-            ),
-          ),
-        if (_showFloodHazard && _hazardAsset != null && !_mapUnavailable)
+        if (_hazardAsset != null && !_mapUnavailable)
           Positioned(
             left: 12,
             bottom: widget.attributionBottomInset + 32,
-            child: const _FloodHazardLegend(),
+            child: _FloodHazardLegend(kind: _hazard!),
           ),
         Positioned(
           left: 12,
@@ -988,10 +1180,16 @@ class _StormMapState extends State<StormMap> {
               final pin = _selectedPin!;
               final point = _selectedPinScreenPoint!;
               const bubbleWidth = 230.0;
-              final left = math
-                  .max(8.0, math.min(point.dx - bubbleWidth / 2,
-                      constraints.maxWidth - bubbleWidth - 8))
-                  .toDouble();
+              final left =
+                  math
+                      .max(
+                        8.0,
+                        math.min(
+                          point.dx - bubbleWidth / 2,
+                          constraints.maxWidth - bubbleWidth - 8,
+                        ),
+                      )
+                      .toDouble();
               final top = math.max(8.0, point.dy - 92).toDouble();
               final status = switch (pin.status) {
                 'F' => pin.category == 'evacuation' ? 'Full' : 'Flooding now',
@@ -1047,27 +1245,42 @@ class _StormMapState extends State<StormMap> {
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(pin.label,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                                  Text(
+                                    pin.label,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
                                   const SizedBox(height: 2),
-                                  Text(category,
-                                      style: TextStyle(fontSize: 12,
-                                          color: context.nimbusPalette.muted)),
-                                  Text(status,
-                                      style: const TextStyle(fontSize: 13,
-                                          fontWeight: FontWeight.w800)),
-                                  Text('${pin.category == 'evacuation' ? 'Occupancy' : 'Intensity'}: ${pin.intensity}%',
-                                      style: const TextStyle(fontSize: 12)),
+                                  Text(
+                                    category,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: context.nimbusPalette.muted,
+                                    ),
+                                  ),
+                                  Text(
+                                    status,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  Text(
+                                    pinAmountText(pin),
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
                                 ],
                               ),
                             ),
                             InkWell(
-                              onTap: () => setState(() {
-                                _selectedPin = null;
-                                _selectedPinScreenPoint = null;
-                              }),
+                              onTap:
+                                  () => setState(() {
+                                    _selectedPin = null;
+                                    _selectedPinScreenPoint = null;
+                                  }),
                               child: const Padding(
                                 padding: EdgeInsets.all(4),
                                 child: Icon(Icons.close, size: 16),
@@ -1097,68 +1310,67 @@ class _StormMapState extends State<StormMap> {
     ),
   );
 
-  void _toggleFloodHazard() {
-    setState(() => _showFloodHazard = !_showFloodHazard);
-    unawaited(_syncFloodHazard());
-  }
-
   /// Adds, swaps or removes the NOAH flood hazard layer to match the toggle
   /// and the selected town. Calls are queued so they never overlap.
   Future<void> _syncFloodHazard() {
-    return _hazardQueue = _hazardQueue.then((_) async {
-      final controller = _controller;
-      if (!mounted || controller == null || !_styleLoaded) return;
-      final wanted = _showFloodHazard && _hazardAsset != null
-          ? widget.location.code
-          : null;
-      if (wanted == _hazardOnMapCode) return;
-      try {
-        if (_hazardOnMapCode != null) {
-          await controller.removeLayer(_hazardLayerId);
-          await controller.removeSource(_hazardSourceId);
-          _hazardOnMapCode = null;
-        }
-        if (wanted == null) return;
-        final geojson = jsonDecode(
-          await rootBundle.loadString(_floodHazardAssets[wanted]!),
-        ) as Map<String, dynamic>;
-        await controller.addGeoJsonSource(_hazardSourceId, geojson);
-        await controller.addFillLayer(
-          _hazardSourceId,
-          _hazardLayerId,
-          ml.FillLayerProperties(
-            fillColor: [
-              'match',
-              ['get', 'Var'],
-              3,
-              _hexColor(_hazardHigh),
-              2,
-              _hexColor(_hazardMedium),
-              _hexColor(_hazardLow),
-            ],
-            fillOpacity: 0.45,
-          ),
-          // Keep street names and the LGU pins readable on top.
-          belowLayerId: await _firstLabelLayerId(controller),
-        );
-        _hazardOnMapCode = wanted;
-      } on PlatformException catch (error) {
-        _showMessage(
-          'Could not show flood-prone areas: ${error.message ?? error.code}',
-        );
-      }
-    }).catchError((_) {});
+    return _hazardQueue = _hazardQueue
+        .then((_) async {
+          final controller = _controller;
+          if (!mounted || controller == null || !_styleLoaded) return;
+          final asset = _hazardAsset;
+          final wanted = asset;
+          if (wanted == _hazardOnMapCode) return;
+          try {
+            if (_hazardOnMapCode != null) {
+              await controller.removeLayer(_hazardLayerId);
+              await controller.removeSource(_hazardSourceId);
+              _hazardOnMapCode = null;
+            }
+            if (wanted == null) return;
+            final geojson =
+                jsonDecode(await rootBundle.loadString(wanted))
+                    as Map<String, dynamic>;
+            await controller.addGeoJsonSource(_hazardSourceId, geojson);
+            await controller.addFillLayer(
+              _hazardSourceId,
+              _hazardLayerId,
+              ml.FillLayerProperties(
+                fillColor: [
+                  'match',
+                  ['get', 'Var'],
+                  3,
+                  _hexColor(_hazardHigh),
+                  2,
+                  _hexColor(_hazardMedium),
+                  _hexColor(_hazardLow),
+                ],
+                fillOpacity: 0.45,
+              ),
+              // Keep street names and the LGU pins readable on top.
+              belowLayerId: await _firstLabelLayerId(controller),
+            );
+            _hazardOnMapCode = wanted;
+          } on PlatformException catch (error) {
+            _showMessage(
+              'Could not show the hazard map: ${error.message ?? error.code}',
+            );
+          }
+        })
+        .catchError((_) {});
   }
 
   /// The first symbol (label) layer in the style, so fills go underneath it.
-  Future<String?> _firstLabelLayerId(ml.MapLibreMapController controller) async {
+  Future<String?> _firstLabelLayerId(
+    ml.MapLibreMapController controller,
+  ) async {
     try {
       final style = await controller.getStyle();
       if (style == null) return null;
       final layers = (jsonDecode(style) as Map<String, dynamic>)['layers'];
       if (layers is! List) return null;
       for (final layer in layers) {
-        if (layer is Map && layer['type'] == 'symbol') return layer['id'] as String?;
+        if (layer is Map && layer['type'] == 'symbol')
+          return layer['id'] as String?;
       }
     } catch (_) {}
     return null;
@@ -1403,13 +1615,23 @@ class _PinSpeechBubble extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(pin.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  Text(
+                    pin.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
                   const SizedBox(height: 2),
-                  Text('$category · $status',
-                      style: TextStyle(fontSize: 11, color: context.nimbusPalette.muted)),
+                  Text(
+                    '$category · $status',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: context.nimbusPalette.muted,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1421,7 +1643,8 @@ class _PinSpeechBubble extends StatelessWidget {
 }
 
 class _FloodHazardLegend extends StatelessWidget {
-  const _FloodHazardLegend();
+  const _FloodHazardLegend({required this.kind});
+  final String kind;
 
   @override
   Widget build(BuildContext context) {
@@ -1444,8 +1667,8 @@ class _FloodHazardLegend extends StatelessWidget {
     return Semantics(
       container: true,
       label:
-          'Flood-prone areas in very heavy rain. Yellow low, orange medium, '
-          'red high. Source UP NOAH, 100-year rain.',
+          '${_hazardInfo[kind]!.$2}. Yellow low, orange medium, red high. '
+          '${_hazardInfo[kind]!.$3}.',
       excludeSemantics: true,
       child: Container(
         padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
@@ -1465,7 +1688,7 @@ class _FloodHazardLegend extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Flood-prone in heavy rain',
+              _hazardInfo[kind]!.$2,
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
@@ -1483,9 +1706,66 @@ class _FloodHazardLegend extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'UP NOAH · 100-yr rain · not live',
+              _hazardInfo[kind]!.$3,
               style: TextStyle(fontSize: 11, color: palette.muted),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Vertical zoom control: + at the top, a slider (street level up top, whole
+/// country at the bottom) and − below. Lives in the foldable map tools.
+class _ZoomControl extends StatelessWidget {
+  const _ZoomControl({required this.zoom, required this.onZoom, required this.onStep});
+  static const _min = 4.0, _max = 18.0;
+  final double zoom;
+  final ValueChanged<double> onZoom;
+  final ValueChanged<int> onStep;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.nimbusPalette;
+    Widget step(IconData icon, int delta, String tip) => IconButton(
+      tooltip: tip,
+      onPressed: () => onStep(delta),
+      icon: Icon(icon, color: palette.text),
+      visualDensity: VisualDensity.compact,
+    );
+    return Material(
+      elevation: 3,
+      color: palette.surface,
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        width: 40,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            step(Icons.add, 1, 'Zoom in'),
+            SizedBox(
+              height: 150,
+              child: RotatedBox(
+                quarterTurns: 3,
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                  ),
+                  child: Slider(
+                    value: zoom.clamp(_min, _max),
+                    min: _min,
+                    max: _max,
+                    semanticFormatterCallback: (v) => 'Zoom ${v.toStringAsFixed(0)}',
+                    onChanged: onZoom,
+                  ),
+                ),
+              ),
+            ),
+            step(Icons.remove, -1, 'Zoom out'),
           ],
         ),
       ),
